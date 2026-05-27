@@ -1,0 +1,10 @@
+[Unit]
+Description=OpenDotSync timer
+
+[Timer]
+OnBootSec=5min
+OnUnitActiveSec=15min
+RandomizedDelaySec=300
+
+[Install]
+WantedBy=timers.target

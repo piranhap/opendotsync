@@ -138,6 +138,13 @@ pub enum Command {
         #[command(subcommand)]
         action: EncryptKeyAction,
     },
+
+    /// Install systemd/launchd timer for automatic sync
+    InstallTimer {
+        /// Uninstall instead of install
+        #[arg(long)]
+        uninstall: bool,
+    },
 }
 
 #[derive(Subcommand)]

@@ -482,6 +482,74 @@ pub fn cmd_status(
     })
 }
 
+pub fn cmd_sync(
+    config: &AppConfig,
+    paths_list: &PathsList,
+    home_dir: &Path,
+    dry_run: bool,
+    force: bool,
+    quiet: bool,
+) -> Result<(), SyncError> {
+    if dry_run {
+        let meta = metadata::load_metadata()?
+            .ok_or(SyncError::NotInitialized)?;
+        let files = collector::collect_files(home_dir, paths_list)?;
+        let current: std::collections::HashMap<String, String> = files
+            .iter()
+            .map(|f| (f.relative_path.clone(), f.checksum.clone()))
+            .collect();
+        let changed: Vec<_> = current
+            .keys()
+            .filter(|k| meta.checksums.get(*k) != current.get(*k))
+            .collect();
+        if changed.is_empty() {
+            println!("Dry run: no local changes to push");
+        } else {
+            println!("Dry run: {} file(s) would be pushed", changed.len());
+            for path in &changed {
+                println!("  M {path}");
+            }
+        }
+        return Ok(());
+    }
+
+    let max_retries: u32 = 3;
+    for attempt in 0..max_retries {
+        match cmd_pull(config, paths_list, home_dir, None, false) {
+            Ok(result) => {
+                if !quiet && !result.already_up_to_date {
+                    print!("{result}");
+                }
+            }
+            Err(SyncError::Backend(BackendError::NoSnapshots(_))) => {}
+            Err(e) => return Err(e),
+        }
+
+        match cmd_push(config, paths_list, home_dir, force, None) {
+            Ok(version) => {
+                if !quiet {
+                    println!("Synced to version {version}");
+                }
+                return Ok(());
+            }
+            Err(SyncError::Backend(BackendError::VersionConflict { local, remote })) => {
+                if attempt + 1 < max_retries {
+                    log::warn!(
+                        "Version conflict (local={local} remote={remote}), retrying {}/{}…",
+                        attempt + 1,
+                        max_retries
+                    );
+                    continue;
+                }
+                return Err(SyncError::Backend(BackendError::VersionConflict { local, remote }));
+            }
+            Err(e) => return Err(e),
+        }
+    }
+
+    unreachable!()
+}
+
 pub fn cmd_du(
     paths_list: &PathsList,
     home_dir: &Path,

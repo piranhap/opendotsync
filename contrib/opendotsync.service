@@ -1,0 +1,9 @@
+[Unit]
+Description=OpenDotSync dotfile synchronization
+After=network.target
+
+[Service]
+Type=oneshot
+ExecStart=%h/.cargo/bin/opendotsync sync
+StandardOutput=journal
+StandardError=journal
