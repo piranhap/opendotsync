@@ -5,7 +5,9 @@ use std::path::{Path, PathBuf};
 use chrono::Utc;
 use thiserror::Error;
 
+use crate::backend::github::GitHubBackend;
 use crate::backend::local::LocalBackend;
+use crate::backend::rclone::RcloneBackend;
 use crate::backend::{BackendError, StorageBackend};
 use crate::retention;
 use crate::collector::{self, CollectedFile};
@@ -161,6 +163,12 @@ fn format_size(bytes: u64) -> String {
 fn create_backend(config: &AppConfig) -> Result<Box<dyn StorageBackend>, SyncError> {
     match &config.backend {
         BackendConfig::Local { path } => Ok(Box::new(LocalBackend::new(path.clone()))),
+        BackendConfig::Rclone { remote, path } => {
+            Ok(Box::new(RcloneBackend::new(remote.clone(), path.clone())))
+        }
+        BackendConfig::GitHub { repo, branch } => {
+            Ok(Box::new(GitHubBackend::new(repo.clone(), branch.clone())))
+        }
         BackendConfig::S3 { .. } => Err(SyncError::UnsupportedBackend("s3".to_string())),
         BackendConfig::Sftp { .. } => Err(SyncError::UnsupportedBackend("sftp".to_string())),
         BackendConfig::Git { .. } => Err(SyncError::UnsupportedBackend("git".to_string())),
@@ -179,6 +187,22 @@ pub fn cmd_init(
                 .map(PathBuf::from)
                 .unwrap_or_else(|| home_dir.join(".opendotsync-store"));
             BackendConfig::Local { path }
+        }
+        "rclone" => {
+            let remote = std::env::var("OPENDOTSYNC_RCLONE_REMOTE")
+                .unwrap_or_else(|_| "myremote".to_string());
+            let path = backend_path
+                .map(|p| p.to_string_lossy().to_string())
+                .unwrap_or_else(|| "opendotsync-store".to_string());
+            BackendConfig::Rclone { remote, path }
+        }
+        "github" => {
+            let repo = backend_path
+                .map(|p| p.to_string_lossy().to_string())
+                .ok_or_else(|| SyncError::UnsupportedBackend(
+                    "github backend requires --path <repo-url>".to_string(),
+                ))?;
+            BackendConfig::GitHub { repo, branch: "main".to_string() }
         }
         other => return Err(SyncError::UnsupportedBackend(other.to_string())),
     };

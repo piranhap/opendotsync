@@ -33,7 +33,7 @@ pub struct Cli {
 pub enum Command {
     /// Initialize opendotsync in the current home directory
     Init {
-        /// Backend type: local, s3, sftp, git
+        /// Backend type: local, rclone, github
         #[arg(long, default_value = "local")]
         backend: String,
 
@@ -41,7 +41,7 @@ pub enum Command {
         #[arg(long, default_value = "default")]
         profile: String,
 
-        /// Path for local backend storage
+        /// Storage path: local dir, rclone remote path, or GitHub repo URL
         #[arg(long)]
         path: Option<PathBuf>,
     },

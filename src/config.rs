@@ -46,6 +46,21 @@ pub enum BackendConfig {
     },
     #[serde(rename = "git")]
     Git { repo: String },
+    #[serde(rename = "rclone")]
+    Rclone {
+        remote: String,
+        path: String,
+    },
+    #[serde(rename = "github")]
+    GitHub {
+        repo: String,
+        #[serde(default = "default_branch")]
+        branch: String,
+    },
+}
+
+fn default_branch() -> String {
+    "main".to_string()
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]

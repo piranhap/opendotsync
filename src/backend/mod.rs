@@ -1,4 +1,6 @@
+pub mod github;
 pub mod local;
+pub mod rclone;
 mod s3;
 mod sftp;
 mod git;
