@@ -41,6 +41,8 @@ pub enum SyncError {
     SizeLimit(u64),
     #[error("encryption error: {0}")]
     Encryption(#[from] crate::encryption::EncryptionError),
+    #[error("profile error: {0}")]
+    Profile(#[from] crate::profiles::ProfileError),
 }
 
 pub struct PullResult {
@@ -544,6 +546,17 @@ pub fn cmd_sync(
     }
 
     unreachable!()
+}
+
+pub fn cmd_profiles_merge(
+    config: &AppConfig,
+    from_profile: &str,
+    to_profile: &str,
+) -> Result<(), SyncError> {
+    let backend = create_backend(config)?;
+    let (_version, data) = backend.pull(from_profile, None)?;
+    backend.push(to_profile, &data, Some(&format!("merged from {from_profile}")))?;
+    Ok(())
 }
 
 pub fn cmd_du(

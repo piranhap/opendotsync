@@ -117,6 +117,43 @@ fn run(
             }
         },
 
+        cli::Command::Profiles { action } => {
+            let config = config::load_config(config_path)?;
+            match action {
+                cli::ProfilesAction::List => {
+                    let profiles = profiles::list_profiles(&config)?;
+                    let current = profiles::current_profile(&config);
+                    if profiles.is_empty() {
+                        println!("No profiles found (run `push` to create one)");
+                    } else {
+                        for p in &profiles {
+                            let marker = if p == current { " *" } else { "" };
+                            println!("{p}{marker}");
+                        }
+                    }
+                    Ok(())
+                }
+                cli::ProfilesAction::Create { name } => {
+                    profiles::create_profile(&name)?;
+                    println!("Profile '{name}' ready — run `push` to populate it");
+                    Ok(())
+                }
+                cli::ProfilesAction::Switch { name } => {
+                    let config_path = config::default_config_path();
+                    profiles::switch_profile(&config_path, &name, &config)?;
+                    println!("Switched to profile '{name}'");
+                    Ok(())
+                }
+                cli::ProfilesAction::Merge { from, to } => {
+                    sync::cmd_profiles_merge(&config, &from, &to)?;
+                    if !quiet {
+                        println!("Merged profile '{from}' into '{to}'");
+                    }
+                    Ok(())
+                }
+            }
+        }
+
         _ => {
             eprintln!("Command not yet implemented");
             std::process::exit(1);

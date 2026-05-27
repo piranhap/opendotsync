@@ -93,6 +93,12 @@ pub fn load_config(config_path: Option<&Path>) -> Result<AppConfig, ConfigError>
     Ok(config)
 }
 
+pub fn save_config(path: &Path, config: &AppConfig) -> Result<(), ConfigError> {
+    let yaml = serde_yml::to_string(config).map_err(|e| ConfigError::Parse(e.to_string()))?;
+    std::fs::write(path, yaml)?;
+    Ok(())
+}
+
 pub fn write_default_config(
     path: &Path,
     backend: &BackendConfig,
