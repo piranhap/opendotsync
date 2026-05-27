@@ -27,3 +27,6 @@ age = "0.10"
 [features]
 default = ["backend-local"]
 backend-local = []
+backend-s3 = []
+backend-sftp = []
+backend-git = []

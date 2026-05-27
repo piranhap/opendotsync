@@ -6,6 +6,7 @@ use thiserror::Error;
 
 use crate::backend::local::LocalBackend;
 use crate::backend::{BackendError, StorageBackend};
+use crate::retention;
 use crate::collector::{self, CollectedFile};
 use crate::config::{AppConfig, BackendConfig, ConfigError};
 use crate::conflicts;
@@ -300,6 +301,8 @@ pub fn cmd_push(
     }
 
     let new_version = backend.push(&meta.profile, &snapshot_data, message)?;
+
+    let _ = retention::prune(backend.as_ref(), &meta.profile, retention::DEFAULT_KEEP);
 
     // Save as parent snapshot
     let parent_path = metadata::parent_snapshot_path();

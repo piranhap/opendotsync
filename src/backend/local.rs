@@ -126,8 +126,21 @@ impl StorageBackend for LocalBackend {
         Ok(manifest.snapshots)
     }
 
-    fn prune(&self, _profile: &str, _keep: usize) -> Result<(), BackendError> {
-        // Stub for Milestone 1
+    fn prune(&self, profile: &str, keep: usize) -> Result<(), BackendError> {
+        let mut manifest = self.load_manifest(profile)?;
+        if manifest.snapshots.len() <= keep {
+            return Ok(());
+        }
+        manifest.snapshots.sort_by_key(|s| s.version);
+        let to_remove = manifest.snapshots.len() - keep;
+        for snap in &manifest.snapshots[..to_remove] {
+            let path = self.snapshot_path(profile, snap.version);
+            if path.exists() {
+                std::fs::remove_file(&path)?;
+            }
+        }
+        manifest.snapshots = manifest.snapshots[to_remove..].to_vec();
+        self.save_manifest(profile, &manifest)?;
         Ok(())
     }
 
