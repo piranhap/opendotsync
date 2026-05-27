@@ -154,10 +154,172 @@ fn run(
             }
         }
 
-        _ => {
-            eprintln!("Command not yet implemented");
-            std::process::exit(1);
+        cli::Command::Log { n } => {
+            let config = config::load_config(config_path)?;
+            let versions = sync::cmd_log(&config, n)?;
+            if versions.is_empty() {
+                println!("No snapshots yet.");
+            }
+            for v in &versions {
+                let msg = v.message.as_deref().unwrap_or("");
+                println!(
+                    "v{:03}  {}  {:>8}  {}",
+                    v.version,
+                    v.timestamp.format("%Y-%m-%d %H:%M"),
+                    format_size(v.size_bytes),
+                    msg,
+                );
+            }
+            Ok(())
         }
+
+        cli::Command::Diff { remote } => {
+            let config = config::load_config(config_path)?;
+            let paths_list = paths::load_paths(None)?;
+            let (modified, added, deleted) =
+                sync::cmd_diff(&config, &paths_list, home_dir, remote)?;
+            if modified.is_empty() && added.is_empty() && deleted.is_empty() {
+                println!("No changes.");
+            } else {
+                for p in &modified { println!("  M {p}"); }
+                for p in &added   { println!("  A {p}"); }
+                for p in &deleted { println!("  D {p}"); }
+            }
+            Ok(())
+        }
+
+        cli::Command::Restore { version, path } => {
+            let config = config::load_config(config_path)?;
+            let restored = sync::cmd_restore(&config, home_dir, version, path.as_deref())?;
+            if !quiet {
+                for p in &restored { println!("  restored {p}"); }
+                println!("Restored {} file(s) from v{version}", restored.len());
+            }
+            Ok(())
+        }
+
+        cli::Command::Conflicts { action } => match action {
+            cli::ConflictsAction::List => {
+                let entries = sync::cmd_conflicts_list()?;
+                if entries.is_empty() {
+                    println!("No conflicts.");
+                }
+                for (v, files) in &entries {
+                    println!("v{v}:");
+                    for f in files { println!("  {f}"); }
+                }
+                Ok(())
+            }
+            cli::ConflictsAction::Show { path } => {
+                let (local, remote) = sync::cmd_conflicts_show(home_dir, &path)?;
+                println!("=== LOCAL ===");
+                println!("{}", String::from_utf8_lossy(&local));
+                println!("=== REMOTE (stashed) ===");
+                println!("{}", String::from_utf8_lossy(&remote));
+                Ok(())
+            }
+            cli::ConflictsAction::AcceptLocal { path } => {
+                sync::cmd_conflicts_accept_local(&path)?;
+                println!("Kept local version of '{path}', removed conflict stash.");
+                Ok(())
+            }
+            cli::ConflictsAction::AcceptRemote { path } => {
+                sync::cmd_conflicts_accept_remote(home_dir, &path)?;
+                println!("Replaced local '{path}' with remote version.");
+                Ok(())
+            }
+            cli::ConflictsAction::Resolve => {
+                let entries = sync::cmd_conflicts_list()?;
+                if entries.is_empty() {
+                    println!("No conflicts to resolve.");
+                    return Ok(());
+                }
+                println!("Unresolved conflicts:");
+                for (v, files) in &entries {
+                    for f in files {
+                        println!("  v{v}: {f}");
+                    }
+                }
+                println!();
+                println!("Use `conflicts show <path>` to inspect, then");
+                println!("`conflicts accept-local <path>` or `conflicts accept-remote <path>`.");
+                Ok(())
+            }
+        },
+
+        cli::Command::Config { action } => match action {
+            cli::ConfigAction::Show => {
+                let path = config_path
+                    .map(std::path::PathBuf::from)
+                    .unwrap_or_else(config::default_config_path);
+                if !path.exists() {
+                    return Err(sync::SyncError::NotInitialized);
+                }
+                print!("{}", std::fs::read_to_string(&path)?);
+                Ok(())
+            }
+            cli::ConfigAction::Edit => {
+                let path = config_path
+                    .map(std::path::PathBuf::from)
+                    .unwrap_or_else(config::default_config_path);
+                let editor = std::env::var("EDITOR").unwrap_or_else(|_| "vi".to_string());
+                std::process::Command::new(&editor).arg(&path).status()?;
+                Ok(())
+            }
+        },
+
+        cli::Command::Paths { action } => match action {
+            cli::PathsAction::List => {
+                let p = paths::default_paths_path();
+                if !p.exists() {
+                    return Err(sync::SyncError::NotInitialized);
+                }
+                print!("{}", std::fs::read_to_string(&p)?);
+                Ok(())
+            }
+            cli::PathsAction::Edit => {
+                let p = paths::default_paths_path();
+                let editor = std::env::var("EDITOR").unwrap_or_else(|_| "vi".to_string());
+                std::process::Command::new(&editor).arg(&p).status()?;
+                Ok(())
+            }
+            cli::PathsAction::Add { path, merge_type } => {
+                let p = paths::default_paths_path();
+                let mut list = paths::load_paths(Some(&p))?;
+                let mt = match merge_type.as_str() {
+                    "history" => paths::MergeType::History,
+                    "union" => paths::MergeType::Union,
+                    _ => paths::MergeType::None,
+                };
+                list.include.push(paths::PathEntry { path: path.clone(), merge_type: mt });
+                paths::save_paths(&p, &list)?;
+                println!("Added '{path}'");
+                Ok(())
+            }
+            cli::PathsAction::Remove { path } => {
+                let p = paths::default_paths_path();
+                let mut list = paths::load_paths(Some(&p))?;
+                let before = list.include.len();
+                list.include.retain(|e| e.path != path);
+                if list.include.len() == before {
+                    eprintln!("'{path}' not found in paths list");
+                } else {
+                    paths::save_paths(&p, &list)?;
+                    println!("Removed '{path}'");
+                }
+                Ok(())
+            }
+        },
+    }
+}
+
+fn format_size(bytes: u64) -> String {
+    if bytes < 1024 {
+        format!("{bytes} B")
+    } else if bytes < 1024 * 1024 {
+        format!("{:.1} KB", bytes as f64 / 1024.0)
+    } else {
+        format!("{:.1} MB", bytes as f64 / (1024.0 * 1024.0))
     }
 }
 

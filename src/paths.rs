@@ -142,6 +142,46 @@ exclude:
     Ok(())
 }
 
+pub fn save_paths(path: &Path, paths_list: &PathsList) -> Result<(), PathsError> {
+    use serde_yml::{Mapping, Value};
+
+    let include_values: Vec<Value> = paths_list
+        .include
+        .iter()
+        .map(|entry| {
+            if entry.merge_type == MergeType::None {
+                Value::String(entry.path.clone())
+            } else {
+                let mt = match entry.merge_type {
+                    MergeType::History => "history",
+                    MergeType::Union => "union",
+                    MergeType::None => "none",
+                };
+                let mut map = Mapping::new();
+                map.insert(Value::String(entry.path.clone()), Value::String(mt.to_string()));
+                Value::Mapping(map)
+            }
+        })
+        .collect();
+
+    let mut root = Mapping::new();
+    root.insert(Value::String("include".into()), Value::Sequence(include_values));
+
+    if !paths_list.exclude.is_empty() {
+        let excl: Vec<Value> =
+            paths_list.exclude.iter().map(|s| Value::String(s.clone())).collect();
+        root.insert(Value::String("exclude".into()), Value::Sequence(excl));
+    }
+
+    let yaml = serde_yml::to_string(&Value::Mapping(root))
+        .map_err(|e| PathsError::Parse(e.to_string()))?;
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    std::fs::write(path, yaml)?;
+    Ok(())
+}
+
 pub fn resolve_merge_type(paths_list: &PathsList, file_path: &str) -> MergeType {
     // 1. Check for exact match
     for entry in &paths_list.include {

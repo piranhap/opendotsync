@@ -1,3 +1,4 @@
+use std::cmp::Reverse;
 use std::fmt;
 use std::path::{Path, PathBuf};
 
@@ -559,6 +560,180 @@ pub fn cmd_profiles_merge(
     let backend = create_backend(config)?;
     let (_version, data) = backend.pull(from_profile, None)?;
     backend.push(to_profile, &data, Some(&format!("merged from {from_profile}")))?;
+    Ok(())
+}
+
+pub fn cmd_log(config: &AppConfig, n: usize) -> Result<Vec<crate::backend::SnapshotMeta>, SyncError> {
+    let meta = metadata::load_metadata()?.ok_or(SyncError::NotInitialized)?;
+    let backend = create_backend(config)?;
+    let mut versions = backend.list_versions(&meta.profile)?;
+    versions.sort_by_key(|v| std::cmp::Reverse(v.version));
+    versions.truncate(n);
+    Ok(versions)
+}
+
+pub fn cmd_diff(
+    config: &AppConfig,
+    paths_list: &PathsList,
+    home_dir: &Path,
+    remote: bool,
+) -> Result<(Vec<String>, Vec<String>, Vec<String>), SyncError> {
+    let meta = metadata::load_metadata()?.ok_or(SyncError::NotInitialized)?;
+
+    let snapshot_data = if remote {
+        let backend = create_backend(config)?;
+        let (_v, data) = backend.pull(&meta.profile, None)?;
+        encryption::decrypt(&data, &config.encryption)?
+    } else {
+        let parent_path = metadata::parent_snapshot_path();
+        if !parent_path.exists() {
+            return Ok((vec![], vec![], vec![]));
+        }
+        let data = std::fs::read(&parent_path)?;
+        encryption::decrypt(&data, &config.encryption)?
+    };
+
+    let snap_files = snapshot::list_snapshot_contents(&snapshot_data)?;
+    let snap_set: std::collections::HashSet<&str> = snap_files.iter().map(|s| s.as_str()).collect();
+
+    let local_files = collector::collect_files(home_dir, paths_list)?;
+    let local_map: std::collections::HashMap<String, ()> =
+        local_files.iter().map(|f| (f.relative_path.clone(), ())).collect();
+
+    let mut modified = vec![];
+    let mut deleted = vec![];
+
+    for snap_path in &snap_files {
+        let local_path = home_dir.join(snap_path);
+        if !local_path.exists() {
+            deleted.push(snap_path.clone());
+            continue;
+        }
+        if let Some(snap_content) = snapshot::read_file_from_snapshot(&snapshot_data, snap_path)? {
+            let local_content = std::fs::read(&local_path)?;
+            if local_content != snap_content {
+                modified.push(snap_path.clone());
+            }
+        }
+    }
+
+    let added: Vec<String> = local_files
+        .iter()
+        .map(|f| f.relative_path.as_str())
+        .filter(|p| !snap_set.contains(p))
+        .map(String::from)
+        .collect();
+
+    Ok((modified, added, deleted))
+}
+
+pub fn cmd_restore(
+    config: &AppConfig,
+    home_dir: &Path,
+    version: u64,
+    path: Option<&str>,
+) -> Result<Vec<String>, SyncError> {
+    let meta = metadata::load_metadata()?.ok_or(SyncError::NotInitialized)?;
+    let backend = create_backend(config)?;
+    let (_v, data) = backend.pull(&meta.profile, Some(version))?;
+    let data = encryption::decrypt(&data, &config.encryption)?;
+    let snap_files = snapshot::list_snapshot_contents(&data)?;
+    let extracted = snapshot::extract_snapshot(&data)?;
+
+    let mut restored = vec![];
+    for snap_path in &snap_files {
+        if let Some(filter) = path {
+            if snap_path != filter {
+                continue;
+            }
+        }
+        let src = extracted.path().join(snap_path);
+        let dst = home_dir.join(snap_path);
+        if src.exists() {
+            if let Some(parent) = dst.parent() {
+                std::fs::create_dir_all(parent)?;
+            }
+            std::fs::copy(&src, &dst)?;
+            restored.push(snap_path.clone());
+        }
+    }
+    Ok(restored)
+}
+
+pub fn cmd_conflicts_list() -> Result<Vec<(u64, Vec<String>)>, SyncError> {
+    let state_dir = metadata::state_dir();
+    let versions = conflicts::list_conflict_versions(&state_dir)
+        .map_err(|e| SyncError::Io(std::io::Error::new(std::io::ErrorKind::Other, e.to_string())))?;
+    let mut result = vec![];
+    for v in versions {
+        let files = conflicts::list_conflicts_for_version(&state_dir, v)
+            .map_err(|e| SyncError::Io(std::io::Error::new(std::io::ErrorKind::Other, e.to_string())))?;
+        result.push((v, files));
+    }
+    Ok(result)
+}
+
+pub fn cmd_conflicts_show(home_dir: &Path, path: &str) -> Result<(Vec<u8>, Vec<u8>), SyncError> {
+    let state_dir = metadata::state_dir();
+    let versions = conflicts::list_conflict_versions(&state_dir)
+        .map_err(|e| SyncError::Io(std::io::Error::new(std::io::ErrorKind::Other, e.to_string())))?;
+
+    let latest_version = versions.last().copied().ok_or_else(|| {
+        SyncError::Io(std::io::Error::new(std::io::ErrorKind::NotFound, "no conflicts found"))
+    })?;
+
+    let stash_path = state_dir.join("conflicts").join(format!("v{latest_version}")).join(path);
+    if !stash_path.exists() {
+        return Err(SyncError::Io(std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            format!("no conflict stash for '{path}' in version {latest_version}"),
+        )));
+    }
+    let local_path = home_dir.join(path);
+    let local = if local_path.exists() { std::fs::read(&local_path)? } else { vec![] };
+    let remote = std::fs::read(&stash_path)?;
+    Ok((local, remote))
+}
+
+pub fn cmd_conflicts_accept_local(path: &str) -> Result<(), SyncError> {
+    let state_dir = metadata::state_dir();
+    let versions = conflicts::list_conflict_versions(&state_dir)
+        .map_err(|e| SyncError::Io(std::io::Error::new(std::io::ErrorKind::Other, e.to_string())))?;
+    for v in versions {
+        let stash = state_dir.join("conflicts").join(format!("v{v}")).join(path);
+        if stash.exists() {
+            std::fs::remove_file(&stash)?;
+        }
+    }
+    Ok(())
+}
+
+pub fn cmd_conflicts_accept_remote(home_dir: &Path, path: &str) -> Result<(), SyncError> {
+    let state_dir = metadata::state_dir();
+    let versions = conflicts::list_conflict_versions(&state_dir)
+        .map_err(|e| SyncError::Io(std::io::Error::new(std::io::ErrorKind::Other, e.to_string())))?;
+
+    let latest = versions.last().copied().ok_or_else(|| {
+        SyncError::Io(std::io::Error::new(std::io::ErrorKind::NotFound, "no conflicts found"))
+    })?;
+
+    let stash = state_dir.join("conflicts").join(format!("v{latest}")).join(path);
+    if !stash.exists() {
+        return Err(SyncError::Io(std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            format!("no conflict stash for '{path}'"),
+        )));
+    }
+    let dst = home_dir.join(path);
+    if let Some(parent) = dst.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    std::fs::copy(&stash, &dst)?;
+    // Remove all stashes for this path
+    for v in &versions {
+        let s = state_dir.join("conflicts").join(format!("v{v}")).join(path);
+        if s.exists() { let _ = std::fs::remove_file(&s); }
+    }
     Ok(())
 }
 
