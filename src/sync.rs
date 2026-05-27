@@ -201,6 +201,7 @@ pub fn cmd_init(
                 .ok_or_else(|| SyncError::UnsupportedBackend(
                     "github backend requires --path <repo-url>".to_string(),
                 ))?;
+            GitHubBackend::validate_repo_url(&repo)?;
             BackendConfig::GitHub { repo, branch: "main".to_string() }
         }
         other => return Err(SyncError::UnsupportedBackend(other.to_string())),

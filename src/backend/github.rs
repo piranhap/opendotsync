@@ -16,6 +16,20 @@ impl GitHubBackend {
         GitHubBackend { repo, branch, cache_dir }
     }
 
+    pub fn validate_repo_url(repo: &str) -> Result<(), BackendError> {
+        // Catch mixed https://git@ format (a common mistake)
+        if repo.starts_with("https://git@") || repo.starts_with("http://git@") {
+            return Err(BackendError::Io(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                format!(
+                    "invalid repo URL '{}'\n  Use SSH:   git@github.com:user/repo.git\n  Use HTTPS: https://github.com/user/repo.git",
+                    repo
+                ),
+            )));
+        }
+        Ok(())
+    }
+
     fn cache_dir_for_repo(repo: &str) -> PathBuf {
         let slug = repo
             .trim_start_matches("https://")
@@ -93,8 +107,27 @@ impl GitHubBackend {
         Ok(())
     }
 
+    fn ensure_git_identity(&self) {
+        let repo = self.cache_dir.to_str().unwrap_or("");
+        let has_email = Command::new("git")
+            .args(["-C", repo, "config", "user.email"])
+            .output()
+            .map(|o| !o.stdout.is_empty())
+            .unwrap_or(false);
+        if !has_email {
+            let _ = Command::new("git")
+                .args(["-C", repo, "config", "user.email", "opendotsync@localhost"])
+                .status();
+            let _ = Command::new("git")
+                .args(["-C", repo, "config", "user.name", "opendotsync"])
+                .status();
+        }
+    }
+
     fn commit_and_push(&self, message: &str) -> Result<(), BackendError> {
         let repo = self.cache_dir.to_str().unwrap_or("");
+
+        self.ensure_git_identity();
 
         let status = Command::new("git").args(["-C", repo, "add", "-A"]).status()?;
         if !status.success() {
