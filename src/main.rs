@@ -87,6 +87,36 @@ fn run(
 
         cli::Command::InstallTimer { uninstall } => install_timer(uninstall),
 
+        cli::Command::EncryptKey { action } => match action {
+            cli::EncryptKeyAction::Generate => {
+                let identity_path = config::default_config_dir().join("identity.age");
+                let pubkey = encryption::generate_keypair(&identity_path)?;
+                if !quiet {
+                    println!("Generated key pair");
+                    println!("  Identity file: {}", identity_path.display());
+                    println!("  Public key: {pubkey}");
+                    println!();
+                    println!("Add to ~/.config/opendotsync/config.yaml:");
+                    println!("  encryption:");
+                    println!("    enabled: true");
+                    println!("    identity: {}", identity_path.display());
+                }
+                Ok(())
+            }
+            cli::EncryptKeyAction::Export => {
+                let config = config::load_config(config_path)?;
+                let identity_path = config.encryption.identity.ok_or_else(|| {
+                    sync::SyncError::Io(std::io::Error::new(
+                        std::io::ErrorKind::NotFound,
+                        "no identity configured in config.yaml",
+                    ))
+                })?;
+                let pubkey = encryption::export_public_key(&identity_path)?;
+                println!("{pubkey}");
+                Ok(())
+            }
+        },
+
         _ => {
             eprintln!("Command not yet implemented");
             std::process::exit(1);

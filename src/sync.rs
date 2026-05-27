@@ -39,6 +39,8 @@ pub enum SyncError {
     NotInitialized,
     #[error("snapshot exceeds size limit: {0} bytes")]
     SizeLimit(u64),
+    #[error("encryption error: {0}")]
+    Encryption(#[from] crate::encryption::EncryptionError),
 }
 
 pub struct PullResult {
@@ -213,8 +215,7 @@ pub fn cmd_init(
     }
 
     let snapshot_data = snapshot::create_snapshot(home_dir, &files)?;
-    let snapshot_data = encryption::encrypt(&snapshot_data)
-        .map_err(|e| SyncError::Io(std::io::Error::new(std::io::ErrorKind::Other, e.to_string())))?;
+    let snapshot_data = encryption::encrypt(&snapshot_data, &config.encryption)?;
 
     let backend = create_backend(&config)?;
     let version = backend.push(profile, &snapshot_data, Some("initial snapshot"))?;
@@ -280,8 +281,7 @@ pub fn cmd_push(
     }
 
     let snapshot_data = snapshot::create_snapshot(home_dir, &files)?;
-    let snapshot_data = encryption::encrypt(&snapshot_data)
-        .map_err(|e| SyncError::Io(std::io::Error::new(std::io::ErrorKind::Other, e.to_string())))?;
+    let snapshot_data = encryption::encrypt(&snapshot_data, &config.encryption)?;
 
     let backend = create_backend(config)?;
 
@@ -338,8 +338,7 @@ pub fn cmd_pull(
         });
     }
 
-    let remote_data = encryption::decrypt(&remote_data)
-        .map_err(|e| SyncError::Io(std::io::Error::new(std::io::ErrorKind::Other, e.to_string())))?;
+    let remote_data = encryption::decrypt(&remote_data, &config.encryption)?;
 
     let remote_snapshot = snapshot::extract_snapshot(&remote_data)?;
 
@@ -352,10 +351,7 @@ pub fn cmd_pull(
     };
 
     let parent_data = match &parent_data {
-        Some(data) => Some(
-            encryption::decrypt(data)
-                .map_err(|e| SyncError::Io(std::io::Error::new(std::io::ErrorKind::Other, e.to_string())))?
-        ),
+        Some(data) => Some(encryption::decrypt(data, &config.encryption)?),
         None => None,
     };
 
