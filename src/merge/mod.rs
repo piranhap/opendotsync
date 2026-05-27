@@ -1,8 +1,8 @@
 pub mod none;
-mod history;
-mod history_bash;
-mod history_zsh;
-mod history_fish;
+pub mod history;
+pub mod history_bash;
+pub mod history_zsh;
+pub mod history_fish;
 mod union;
 
 use std::path::{Path, PathBuf};
@@ -47,19 +47,14 @@ pub fn merge_file(
             state_dir,
             remote_version,
         ),
-        MergeType::History => {
-            log::warn!(
-                "History merge not yet implemented for {relative_path}, falling back to last-write-wins"
-            );
-            none::merge(
-                relative_path,
-                local_path,
-                remote_content,
-                ancestor_content,
-                state_dir,
-                remote_version,
-            )
-        }
+        MergeType::History => history::merge(
+            relative_path,
+            local_path,
+            remote_content,
+            ancestor_content,
+            state_dir,
+            remote_version,
+        ),
         MergeType::Union => {
             log::warn!(
                 "Union merge not yet implemented for {relative_path}, falling back to last-write-wins"

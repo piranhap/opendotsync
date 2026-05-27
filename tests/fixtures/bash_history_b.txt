@@ -1,0 +1,10 @@
+#1620000000
+ls -la
+#1620000100
+cd /tmp
+#1620000200
+git status
+#1620000320
+cargo build
+#1620000500
+ssh myserver
