@@ -1,5 +1,5 @@
 use chrono::Utc;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::process::Command;
 
 use super::{BackendError, BackendManifest, SnapshotMeta, StorageBackend};

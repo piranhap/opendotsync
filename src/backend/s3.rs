@@ -2,6 +2,7 @@
 
 use super::{BackendError, SnapshotMeta, StorageBackend};
 
+#[allow(dead_code)]
 pub struct S3Backend;
 
 impl StorageBackend for S3Backend {

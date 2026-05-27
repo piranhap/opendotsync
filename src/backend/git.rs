@@ -1,4 +1,5 @@
 // Git backend — stub. Add `git2` dep and implement when ready.
+#![allow(dead_code)]
 
 use super::{BackendError, SnapshotMeta, StorageBackend};
 

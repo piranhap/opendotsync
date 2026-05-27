@@ -1,4 +1,4 @@
-use std::io::{Cursor, Read, Write};
+use std::io::{Cursor, Read};
 use std::path::Path;
 
 use thiserror::Error;
@@ -16,7 +16,7 @@ pub enum SnapshotError {
 }
 
 pub fn create_snapshot(
-    home_dir: &Path,
+    _home_dir: &Path,
     files: &[CollectedFile],
 ) -> Result<Vec<u8>, SnapshotError> {
     let mut compressed = Vec::new();

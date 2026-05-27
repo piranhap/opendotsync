@@ -1,4 +1,3 @@
-use std::cmp::Reverse;
 use std::fmt;
 use std::path::{Path, PathBuf};
 
@@ -10,7 +9,7 @@ use crate::backend::local::LocalBackend;
 use crate::backend::rclone::RcloneBackend;
 use crate::backend::{BackendError, StorageBackend};
 use crate::retention;
-use crate::collector::{self, CollectedFile};
+use crate::collector;
 use crate::config::{AppConfig, BackendConfig, ConfigError};
 use crate::conflicts;
 use crate::encryption;
@@ -621,9 +620,6 @@ pub fn cmd_diff(
     let snap_set: std::collections::HashSet<&str> = snap_files.iter().map(|s| s.as_str()).collect();
 
     let local_files = collector::collect_files(home_dir, paths_list)?;
-    let local_map: std::collections::HashMap<String, ()> =
-        local_files.iter().map(|f| (f.relative_path.clone(), ())).collect();
-
     let mut modified = vec![];
     let mut deleted = vec![];
 

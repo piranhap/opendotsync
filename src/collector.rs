@@ -35,6 +35,7 @@ pub struct SizeWarning {
 
 const SINGLE_FILE_WARN: u64 = 10 * 1024 * 1024; // 10 MB
 const TOTAL_WARN: u64 = 100 * 1024 * 1024; // 100 MB
+#[allow(dead_code)]
 const TOTAL_HARD_LIMIT: u64 = 500 * 1024 * 1024; // 500 MB
 
 pub fn collect_files(

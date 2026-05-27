@@ -1,4 +1,5 @@
 // SFTP backend — stub. Add `ssh2` dep and implement when ready.
+#![allow(dead_code)]
 
 use super::{BackendError, SnapshotMeta, StorageBackend};
 
