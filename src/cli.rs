@@ -55,6 +55,10 @@ pub enum Command {
         /// Optional note attached to this snapshot
         #[arg(long, short)]
         message: Option<String>,
+
+        /// Fail on version conflict instead of auto-pulling first
+        #[arg(long)]
+        no_auto_pull: bool,
     },
 
     /// Download latest snapshot and merge

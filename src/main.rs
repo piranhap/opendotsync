@@ -44,11 +44,17 @@ fn run(
             path,
         } => sync::cmd_init(home_dir, &backend, path.as_deref(), &profile),
 
-        cli::Command::Push { force, message } => {
+        cli::Command::Push { force, message, no_auto_pull } => {
             let config = config::load_config(config_path)?;
             let paths_list = paths::load_paths(None)?;
-            let version =
-                sync::cmd_push(&config, &paths_list, home_dir, force, message.as_deref())?;
+            let version = sync::cmd_push(
+                &config,
+                &paths_list,
+                home_dir,
+                force,
+                message.as_deref(),
+                no_auto_pull,
+            )?;
             if !quiet {
                 println!("Pushed version {version}");
             }

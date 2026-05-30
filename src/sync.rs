@@ -46,6 +46,8 @@ pub enum SyncError {
     Encryption(#[from] crate::encryption::EncryptionError),
     #[error("profile error: {0}")]
     Profile(#[from] crate::profiles::ProfileError),
+    #[error("pull introduced {0} conflict(s) — resolve with `opendotsync conflicts` then push again")]
+    PullConflicts(usize),
 }
 
 pub struct PullResult {
@@ -291,9 +293,32 @@ pub fn cmd_push(
     home_dir: &Path,
     force: bool,
     message: Option<&str>,
+    no_auto_pull: bool,
 ) -> Result<u64, SyncError> {
     let meta = metadata::load_metadata()?
         .ok_or(SyncError::NotInitialized)?;
+
+    // If the remote is ahead, pull+merge first so the push is fast-forward — unless
+    // the user forced or opted out. This mirrors `git pull --rebase` ergonomics so
+    // users who reach for `push` first don't hit a hard version-conflict error. (#4)
+    if !force && !no_auto_pull {
+        let backend = create_backend(config)?;
+        if let Some(remote_version) = backend.latest_version(&meta.profile)? {
+            if remote_version > meta.version {
+                eprintln!(
+                    "Remote has a newer version (v{remote_version} > v{}) — pulling first…",
+                    meta.version
+                );
+                let pull = cmd_pull(config, paths_list, home_dir, None, false)?;
+                if !pull.conflicts.is_empty() {
+                    return Err(SyncError::PullConflicts(pull.conflicts.len()));
+                }
+                // Local is now caught up to the remote; retry the push from a clean
+                // state. metadata.version == remote_version, so this won't recurse again.
+                return cmd_push(config, paths_list, home_dir, force, message, no_auto_pull);
+            }
+        }
+    }
 
     let files = collector::collect_files(home_dir, paths_list)?;
 
@@ -401,17 +426,24 @@ pub fn cmd_pull(
     let mut updated = Vec::new();
     let mut conflict_paths = Vec::new();
     let mut new_files = Vec::new();
-    // For conflicted files we keep the local content but the new parent snapshot
-    // holds the remote content. Record the remote checksum so metadata reflects the
-    // parent — otherwise the next `push` sees local == metadata and skips the file,
-    // silently dropping the local change. (Issue #1)
-    let mut conflict_remote_checksums: std::collections::HashMap<String, String> =
+    // metadata.checksums must mirror the new parent (the remote snapshot), NOT the
+    // local working files. After a merge that keeps or combines local content
+    // (conflict kept-local, remote==ancestor kept-local, or a history/union merge),
+    // the local file diverges from the parent — recording the parent's checksum here
+    // lets the next `push` detect that divergence and propagate the local content.
+    // Recording the local checksum instead would make push see "no changes" and
+    // silently strand the local edit. (Issue #1 and its non-conflict siblings.)
+    let mut remote_checksums: std::collections::HashMap<String, String> =
         std::collections::HashMap::new();
 
     for remote_file_path in &remote_files {
         let local_path = home_dir.join(remote_file_path);
 
         let remote_content = std::fs::read(remote_snapshot.path().join(remote_file_path))?;
+        remote_checksums.insert(
+            remote_file_path.clone(),
+            collector::compute_checksum_bytes(&remote_content),
+        );
 
         if overwrite {
             if let Some(parent) = local_path.parent() {
@@ -441,13 +473,7 @@ pub fn cmd_pull(
 
         match result {
             MergeResult::Updated => updated.push(remote_file_path.clone()),
-            MergeResult::Conflict { .. } => {
-                conflict_remote_checksums.insert(
-                    remote_file_path.clone(),
-                    collector::compute_checksum_bytes(&remote_content),
-                );
-                conflict_paths.push(remote_file_path.clone());
-            }
+            MergeResult::Conflict { .. } => conflict_paths.push(remote_file_path.clone()),
             MergeResult::NewFile => new_files.push(remote_file_path.clone()),
             MergeResult::Unchanged => {}
         }
@@ -456,16 +482,9 @@ pub fn cmd_pull(
     // Save remote snapshot as new parent
     std::fs::write(&parent_path, &remote_data)?;
 
-    // Recompute checksums. For conflicted files, store the remote (parent) checksum
-    // instead of the kept-local one so the next push detects the divergence. (Issue #1)
-    let files = collector::collect_files(home_dir, paths_list)?;
-    let mut checksums: std::collections::HashMap<String, String> = files
-        .iter()
-        .map(|f| (f.relative_path.clone(), f.checksum.clone()))
-        .collect();
-    for (path, remote_sum) in conflict_remote_checksums {
-        checksums.insert(path, remote_sum);
-    }
+    // metadata.checksums mirrors the new parent (remote snapshot). Any local file
+    // that diverges from it will be detected and pushed on the next `push`. (Issue #1)
+    let checksums = remote_checksums;
 
     let updated_meta = Metadata {
         version: remote_version,
@@ -577,7 +596,9 @@ pub fn cmd_sync(
             Err(e) => return Err(e),
         }
 
-        match cmd_push(config, paths_list, home_dir, force, None) {
+        // sync already runs its own pull→push loop; disable cmd_push's auto-pull
+        // to avoid a nested pull on each attempt.
+        match cmd_push(config, paths_list, home_dir, force, None, true) {
             Ok(version) => {
                 if !quiet {
                     println!("Synced to version {version}");

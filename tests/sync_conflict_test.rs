@@ -55,7 +55,7 @@ fn push_after_conflict_keeps_local_change() {
     // The bug: this push reported "No changes" and never created v3, dropping
     // A's alias. The fix stores the remote checksum for the conflicted file,
     // so push detects the divergence and creates a new version.
-    let pushed = sync::cmd_push(&cfg, &pl, &home_a, false, None).unwrap();
+    let pushed = sync::cmd_push(&cfg, &pl, &home_a, false, None, false).unwrap();
     assert_eq!(
         pushed, 3,
         "push after a kept-local conflict must create a new version"

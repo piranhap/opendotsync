@@ -42,7 +42,7 @@ opendotsync sync
 | Command | Description |
 |---------|-------------|
 | `init` | Initialize config, paths list, and first snapshot |
-| `push` | Create snapshot and upload |
+| `push` | Create snapshot and upload (auto-pulls first if the remote is ahead; `--no-auto-pull` to disable) |
 | `pull` | Download latest snapshot and merge |
 | `sync` | Pull → merge → push in one step (with retry) |
 | `status` | Show local version, remote version, and changed files |
