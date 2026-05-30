@@ -275,7 +275,34 @@ fn run(
                 if !p.exists() {
                     return Err(sync::SyncError::NotInitialized);
                 }
-                print!("{}", std::fs::read_to_string(&p)?);
+                let list = paths::load_paths(Some(&p))?;
+                println!("Allowlist (synced):");
+                if list.include.is_empty() {
+                    println!("  (none)");
+                } else {
+                    for entry in &list.include {
+                        let suffix = match entry.merge_type {
+                            paths::MergeType::None => {
+                                if entry.path.ends_with('/') {
+                                    "  (dir)".to_string()
+                                } else {
+                                    String::new()
+                                }
+                            }
+                            paths::MergeType::History => "  [merge: history]".to_string(),
+                            paths::MergeType::Union => "  [merge: union]".to_string(),
+                        };
+                        println!("  {}{}", entry.path, suffix);
+                    }
+                }
+                println!("\nBlacklist (never synced):");
+                if list.exclude.is_empty() {
+                    println!("  (none)");
+                } else {
+                    for pattern in &list.exclude {
+                        println!("  {pattern}");
+                    }
+                }
                 Ok(())
             }
             cli::PathsAction::Edit => {
@@ -307,6 +334,77 @@ fn run(
                 } else {
                     paths::save_paths(&p, &list)?;
                     println!("Removed '{path}'");
+                }
+                Ok(())
+            }
+            cli::PathsAction::Exclude { action } => match action {
+                cli::ExcludeAction::List => {
+                    let p = paths::default_paths_path();
+                    let list = paths::load_paths(Some(&p))?;
+                    if list.exclude.is_empty() {
+                        println!("Blacklist is empty");
+                    } else {
+                        for pattern in &list.exclude {
+                            println!("{pattern}");
+                        }
+                    }
+                    Ok(())
+                }
+                cli::ExcludeAction::Add { pattern } => {
+                    let p = paths::default_paths_path();
+                    let mut list = paths::load_paths(Some(&p))?;
+                    if list.exclude.iter().any(|e| e == &pattern) {
+                        eprintln!("'{pattern}' already in blacklist");
+                    } else {
+                        list.exclude.push(pattern.clone());
+                        paths::save_paths(&p, &list)?;
+                        println!("Excluded '{pattern}'");
+                    }
+                    Ok(())
+                }
+                cli::ExcludeAction::Remove { pattern } => {
+                    let p = paths::default_paths_path();
+                    let mut list = paths::load_paths(Some(&p))?;
+                    let before = list.exclude.len();
+                    list.exclude.retain(|e| e != &pattern);
+                    if list.exclude.len() == before {
+                        eprintln!("'{pattern}' not found in blacklist");
+                    } else {
+                        paths::save_paths(&p, &list)?;
+                        println!("Removed '{pattern}' from blacklist");
+                    }
+                    Ok(())
+                }
+            },
+            cli::PathsAction::Check { path } => {
+                let p = paths::default_paths_path();
+                let list = paths::load_paths(Some(&p))?;
+                // Normalize: strip a leading "~/" or home prefix and leading slash
+                // so users can pass ".bashrc", "~/.bashrc", or "/home/me/.bashrc".
+                let rel = if let Ok(stripped) = std::path::Path::new(&path).strip_prefix(home_dir) {
+                    stripped.to_string_lossy().to_string()
+                } else {
+                    path.trim_start_matches("~/").trim_start_matches('/').to_string()
+                };
+                match paths::check_path(&list, &rel) {
+                    paths::SyncDecision::Synced { matched, merge_type } => {
+                        let mt = match merge_type {
+                            paths::MergeType::None => "none",
+                            paths::MergeType::History => "history",
+                            paths::MergeType::Union => "union",
+                        };
+                        println!("'{rel}' WILL be synced");
+                        println!("  matched allowlist entry: '{matched}'");
+                        println!("  merge strategy: {mt}");
+                    }
+                    paths::SyncDecision::Blocked { pattern } => {
+                        println!("'{rel}' will NOT be synced");
+                        println!("  blocked by blacklist pattern: '{pattern}'");
+                    }
+                    paths::SyncDecision::NotTracked => {
+                        println!("'{rel}' will NOT be synced");
+                        println!("  not on the allowlist (add it with 'opendotsync paths add {rel}')");
+                    }
                 }
                 Ok(())
             }

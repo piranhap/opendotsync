@@ -149,19 +149,36 @@ pub enum Command {
 
 #[derive(Subcommand)]
 pub enum PathsAction {
-    /// Show current paths list
+    /// Show current paths list (allowlist + blacklist)
     List,
     /// Open paths list in $EDITOR
     Edit,
-    /// Add a path
+    /// Add a path to the allowlist (things to sync)
     Add {
         path: String,
         /// Merge type: none, history, union
         #[arg(default_value = "none")]
         merge_type: String,
     },
-    /// Remove a path from tracking
+    /// Remove a path from the allowlist
     Remove { path: String },
+    /// Manage the blacklist (patterns never to sync)
+    Exclude {
+        #[command(subcommand)]
+        action: ExcludeAction,
+    },
+    /// Check whether a given path would be synced, and why
+    Check { path: String },
+}
+
+#[derive(Subcommand)]
+pub enum ExcludeAction {
+    /// List blacklist patterns
+    List,
+    /// Add a blacklist pattern (glob, e.g. "*.secret" or ".ssh/id_*")
+    Add { pattern: String },
+    /// Remove a blacklist pattern
+    Remove { pattern: String },
 }
 
 #[derive(Subcommand)]

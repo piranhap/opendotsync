@@ -233,6 +233,74 @@ pub fn is_excluded(paths_list: &PathsList, file_path: &str) -> bool {
     false
 }
 
+/// The reason a path is or isn't synced, for `paths check`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SyncDecision {
+    /// File is on the allowlist and not blocked. Carries the matched entry path and merge type.
+    Synced { matched: String, merge_type: MergeType },
+    /// File matches the allowlist but is blocked by a blacklist pattern.
+    Blocked { pattern: String },
+    /// File is not on the allowlist at all.
+    NotTracked,
+}
+
+/// Determine whether `file_path` (relative to home) would be synced, and why.
+/// Mirrors the collector's precedence: a file must be on the allowlist, and any
+/// matching blacklist pattern removes it (blacklist wins).
+pub fn check_path(paths_list: &PathsList, file_path: &str) -> SyncDecision {
+    let included = matched_include(paths_list, file_path);
+    if let Some(pattern) = matched_exclude(paths_list, file_path) {
+        // Only report Blocked if the file would otherwise have been synced.
+        if included.is_some() {
+            return SyncDecision::Blocked { pattern };
+        }
+    }
+    match included {
+        Some(entry) => SyncDecision::Synced {
+            matched: entry.path.clone(),
+            merge_type: resolve_merge_type(paths_list, file_path),
+        },
+        None => SyncDecision::NotTracked,
+    }
+}
+
+/// Return the allowlist entry that matches `file_path`, if any.
+fn matched_include<'a>(paths_list: &'a PathsList, file_path: &str) -> Option<&'a PathEntry> {
+    paths_list.include.iter().find(|entry| {
+        if entry.path.ends_with('/') {
+            let dir_prefix = &entry.path;
+            if file_path.starts_with(dir_prefix.as_str()) {
+                return true;
+            }
+            let dir_no_slash = entry.path.trim_end_matches('/');
+            file_path.starts_with(dir_no_slash)
+                && file_path.as_bytes().get(dir_no_slash.len()) == Some(&b'/')
+        } else {
+            file_path == entry.path
+        }
+    })
+}
+
+/// Return the blacklist pattern that matches `file_path`, if any.
+fn matched_exclude(paths_list: &PathsList, file_path: &str) -> Option<String> {
+    for pattern_str in &paths_list.exclude {
+        let target = if pattern_str.contains('/') {
+            file_path
+        } else {
+            Path::new(file_path)
+                .file_name()
+                .and_then(|f| f.to_str())
+                .unwrap_or("")
+        };
+        if let Ok(pat) = Pattern::new(pattern_str) {
+            if pat.matches(target) {
+                return Some(pattern_str.clone());
+            }
+        }
+    }
+    None
+}
+
 pub fn is_included(paths_list: &PathsList, file_path: &str) -> bool {
     for entry in &paths_list.include {
         // Directory include: "bin/" matches anything under bin/
@@ -380,5 +448,78 @@ exclude:
             .find(|e| e.path == ".bash_history")
             .expect("should have .bash_history");
         assert_eq!(history_entry.merge_type, MergeType::History);
+    }
+
+    #[test]
+    fn check_path_synced() {
+        let paths = PathsList {
+            include: vec![PathEntry {
+                path: ".bashrc".to_string(),
+                merge_type: MergeType::None,
+            }],
+            exclude: vec![],
+        };
+        assert_eq!(
+            check_path(&paths, ".bashrc"),
+            SyncDecision::Synced {
+                matched: ".bashrc".to_string(),
+                merge_type: MergeType::None
+            }
+        );
+    }
+
+    #[test]
+    fn check_path_blocked_by_blacklist() {
+        // A file inside an allowlisted dir but matching a blacklist pattern is blocked.
+        let paths = PathsList {
+            include: vec![PathEntry {
+                path: ".ssh/".to_string(),
+                merge_type: MergeType::None,
+            }],
+            exclude: vec![".ssh/id_*".to_string()],
+        };
+        assert_eq!(
+            check_path(&paths, ".ssh/id_rsa"),
+            SyncDecision::Blocked {
+                pattern: ".ssh/id_*".to_string()
+            }
+        );
+        // A non-matching file under the same dir is still synced.
+        assert!(matches!(
+            check_path(&paths, ".ssh/config"),
+            SyncDecision::Synced { .. }
+        ));
+    }
+
+    #[test]
+    fn check_path_not_tracked() {
+        let paths = PathsList {
+            include: vec![PathEntry {
+                path: ".bashrc".to_string(),
+                merge_type: MergeType::None,
+            }],
+            // Blacklist match on an untracked file should NOT report Blocked.
+            exclude: vec!["*.swp".to_string()],
+        };
+        assert_eq!(check_path(&paths, ".vimrc"), SyncDecision::NotTracked);
+        assert_eq!(check_path(&paths, "foo.swp"), SyncDecision::NotTracked);
+    }
+
+    #[test]
+    fn check_path_directory_carries_merge_type() {
+        let paths = PathsList {
+            include: vec![PathEntry {
+                path: ".config/claude/".to_string(),
+                merge_type: MergeType::Union,
+            }],
+            exclude: vec![],
+        };
+        assert_eq!(
+            check_path(&paths, ".config/claude/settings.json"),
+            SyncDecision::Synced {
+                matched: ".config/claude/".to_string(),
+                merge_type: MergeType::Union
+            }
+        );
     }
 }

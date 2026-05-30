@@ -50,7 +50,9 @@ opendotsync sync
 | `log` | Show snapshot history |
 | `restore <version>` | Restore files from a specific snapshot |
 | `du` | Show projected snapshot size breakdown |
-| `paths list\|edit\|add\|remove` | Manage the tracked paths list |
+| `paths list\|edit\|add\|remove` | Manage the allowlist (tracked paths) |
+| `paths exclude add\|remove\|list` | Manage the blacklist (patterns never synced) |
+| `paths check <file>` | Show whether a path would be synced, and why |
 | `conflicts list\|show\|accept-local\|accept-remote` | Manage merge conflicts |
 | `profiles list\|create\|switch\|merge` | Manage sync profiles |
 | `config show\|edit` | View or edit configuration |
@@ -86,6 +88,16 @@ exclude:
   - ".ssh/id_*"
   - ".aws/credentials"
   - "*.secret"
+```
+
+**Allowlist** (`include`) gates what gets collected; **blacklist** (`exclude`) subtracts
+from it — a blacklist match always wins, even inside an allowlisted directory. Manage
+both from the CLI without hand-editing the file:
+
+```bash
+opendotsync paths add ".myconfig"          # allowlist an extra file
+opendotsync paths exclude add "*.log"       # blacklist a pattern
+opendotsync paths check ".ssh/id_rsa"       # explain the sync decision for a path
 ```
 
 ## Merge strategies
