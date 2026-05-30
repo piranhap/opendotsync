@@ -196,12 +196,22 @@ pub fn cmd_init(
             BackendConfig::Rclone { remote, path }
         }
         "github" => {
-            let repo = backend_path
+            let raw_repo = backend_path
                 .map(|p| p.to_string_lossy().to_string())
                 .ok_or_else(|| SyncError::UnsupportedBackend(
                     "github backend requires --path <repo-url>".to_string(),
                 ))?;
-            GitHubBackend::validate_repo_url(&repo)?;
+            GitHubBackend::validate_repo_url(&raw_repo)?;
+            // Never persist credentials embedded in the URL — strip them and tell
+            // the user how to supply a token securely at runtime. (Issue #2)
+            let repo = GitHubBackend::strip_credentials(&raw_repo);
+            if GitHubBackend::has_embedded_credentials(&raw_repo) {
+                eprintln!(
+                    "Note: stripped credentials from the repo URL — they will not be saved to config.\n\
+                     Provide a token at runtime via the OPENDOTSYNC_GITHUB_TOKEN environment variable,\n\
+                     or configure git's credential helper / ~/.git-credentials."
+                );
+            }
             BackendConfig::GitHub { repo, branch: "main".to_string() }
         }
         other => return Err(SyncError::UnsupportedBackend(other.to_string())),
