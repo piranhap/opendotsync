@@ -391,6 +391,12 @@ pub fn cmd_pull(
     let mut updated = Vec::new();
     let mut conflict_paths = Vec::new();
     let mut new_files = Vec::new();
+    // For conflicted files we keep the local content but the new parent snapshot
+    // holds the remote content. Record the remote checksum so metadata reflects the
+    // parent — otherwise the next `push` sees local == metadata and skips the file,
+    // silently dropping the local change. (Issue #1)
+    let mut conflict_remote_checksums: std::collections::HashMap<String, String> =
+        std::collections::HashMap::new();
 
     for remote_file_path in &remote_files {
         let local_path = home_dir.join(remote_file_path);
@@ -425,7 +431,13 @@ pub fn cmd_pull(
 
         match result {
             MergeResult::Updated => updated.push(remote_file_path.clone()),
-            MergeResult::Conflict { .. } => conflict_paths.push(remote_file_path.clone()),
+            MergeResult::Conflict { .. } => {
+                conflict_remote_checksums.insert(
+                    remote_file_path.clone(),
+                    collector::compute_checksum_bytes(&remote_content),
+                );
+                conflict_paths.push(remote_file_path.clone());
+            }
             MergeResult::NewFile => new_files.push(remote_file_path.clone()),
             MergeResult::Unchanged => {}
         }
@@ -434,12 +446,16 @@ pub fn cmd_pull(
     // Save remote snapshot as new parent
     std::fs::write(&parent_path, &remote_data)?;
 
-    // Recompute checksums
+    // Recompute checksums. For conflicted files, store the remote (parent) checksum
+    // instead of the kept-local one so the next push detects the divergence. (Issue #1)
     let files = collector::collect_files(home_dir, paths_list)?;
-    let checksums = files
+    let mut checksums: std::collections::HashMap<String, String> = files
         .iter()
         .map(|f| (f.relative_path.clone(), f.checksum.clone()))
         .collect();
+    for (path, remote_sum) in conflict_remote_checksums {
+        checksums.insert(path, remote_sum);
+    }
 
     let updated_meta = Metadata {
         version: remote_version,
