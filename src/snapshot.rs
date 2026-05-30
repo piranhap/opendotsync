@@ -156,7 +156,6 @@ pub fn read_file_from_snapshot(
 mod tests {
     use super::*;
     use crate::collector::CollectedFile;
-    use std::path::PathBuf;
 
     #[test]
     fn snapshot_round_trip() {
