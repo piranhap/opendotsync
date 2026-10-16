@@ -18,6 +18,7 @@ mod sync;
 fn main() {
     env_logger::init();
     let cli = cli::Cli::parse();
+    backend::set_verbose(cli.verbose);
 
     let home_dir = cli
         .home
@@ -44,7 +45,11 @@ fn run(
             path,
         } => sync::cmd_init(home_dir, &backend, path.as_deref(), &profile),
 
-        cli::Command::Push { force, message, no_auto_pull } => {
+        cli::Command::Push {
+            force,
+            message,
+            no_auto_pull,
+        } => {
             let config = config::load_config(config_path)?;
             let paths_list = paths::load_paths(None)?;
             let version = sync::cmd_push(
@@ -188,9 +193,15 @@ fn run(
             if modified.is_empty() && added.is_empty() && deleted.is_empty() {
                 println!("No changes.");
             } else {
-                for p in &modified { println!("  M {p}"); }
-                for p in &added   { println!("  A {p}"); }
-                for p in &deleted { println!("  D {p}"); }
+                for p in &modified {
+                    println!("  M {p}");
+                }
+                for p in &added {
+                    println!("  A {p}");
+                }
+                for p in &deleted {
+                    println!("  D {p}");
+                }
             }
             Ok(())
         }
@@ -199,7 +210,9 @@ fn run(
             let config = config::load_config(config_path)?;
             let restored = sync::cmd_restore(&config, home_dir, version, path.as_deref())?;
             if !quiet {
-                for p in &restored { println!("  restored {p}"); }
+                for p in &restored {
+                    println!("  restored {p}");
+                }
                 println!("Restored {} file(s) from v{version}", restored.len());
             }
             Ok(())
@@ -213,7 +226,9 @@ fn run(
                 }
                 for (v, files) in &entries {
                     println!("v{v}:");
-                    for f in files { println!("  {f}"); }
+                    for f in files {
+                        println!("  {f}");
+                    }
                 }
                 Ok(())
             }
@@ -325,7 +340,10 @@ fn run(
                     "union" => paths::MergeType::Union,
                     _ => paths::MergeType::None,
                 };
-                list.include.push(paths::PathEntry { path: path.clone(), merge_type: mt });
+                list.include.push(paths::PathEntry {
+                    path: path.clone(),
+                    merge_type: mt,
+                });
                 paths::save_paths(&p, &list)?;
                 println!("Added '{path}'");
                 Ok(())
@@ -390,10 +408,15 @@ fn run(
                 let rel = if let Ok(stripped) = std::path::Path::new(&path).strip_prefix(home_dir) {
                     stripped.to_string_lossy().to_string()
                 } else {
-                    path.trim_start_matches("~/").trim_start_matches('/').to_string()
+                    path.trim_start_matches("~/")
+                        .trim_start_matches('/')
+                        .to_string()
                 };
                 match paths::check_path(&list, &rel) {
-                    paths::SyncDecision::Synced { matched, merge_type } => {
+                    paths::SyncDecision::Synced {
+                        matched,
+                        merge_type,
+                    } => {
                         let mt = match merge_type {
                             paths::MergeType::None => "none",
                             paths::MergeType::History => "history",
@@ -409,7 +432,9 @@ fn run(
                     }
                     paths::SyncDecision::NotTracked => {
                         println!("'{rel}' will NOT be synced");
-                        println!("  not on the allowlist (add it with 'opendotsync paths add {rel}')");
+                        println!(
+                            "  not on the allowlist (add it with 'opendotsync paths add {rel}')"
+                        );
                     }
                 }
                 Ok(())
@@ -466,8 +491,8 @@ fn install_systemd_timer(uninstall: bool) -> Result<(), sync::SyncError> {
 
     std::fs::create_dir_all(&systemd_dir)?;
 
-    let binary = std::env::current_exe()
-        .unwrap_or_else(|_| std::path::PathBuf::from("opendotsync"));
+    let binary =
+        std::env::current_exe().unwrap_or_else(|_| std::path::PathBuf::from("opendotsync"));
 
     let service_content = format!(
         "[Unit]\nDescription=OpenDotSync dotfile synchronization\n\n[Service]\nType=oneshot\nExecStart={} sync\n",
@@ -512,8 +537,8 @@ fn install_launchd_timer(uninstall: bool) -> Result<(), sync::SyncError> {
 
     std::fs::create_dir_all(&launch_agents)?;
 
-    let binary = std::env::current_exe()
-        .unwrap_or_else(|_| std::path::PathBuf::from("opendotsync"));
+    let binary =
+        std::env::current_exe().unwrap_or_else(|_| std::path::PathBuf::from("opendotsync"));
 
     let plist = format!(
         "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n\
