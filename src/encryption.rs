@@ -65,15 +65,19 @@ pub fn encrypt(data: &[u8], config: &EncryptionConfig) -> Result<Vec<u8>, Encryp
     if !config.enabled {
         return Ok(data.to_vec());
     }
-    let identity_path = config.identity.as_ref().ok_or(EncryptionError::NoIdentity)?;
+    let identity_path = config
+        .identity
+        .as_ref()
+        .ok_or(EncryptionError::NoIdentity)?;
     let content = std::fs::read_to_string(identity_path)?;
     let identity = parse_identity(&content)?;
     let recipient = identity.to_public();
 
-    let encryptor = age::Encryptor::with_recipients(vec![
-        Box::new(recipient) as Box<dyn age::Recipient + Send>,
-    ])
-    .expect("non-empty recipients");
+    let encryptor =
+        age::Encryptor::with_recipients(
+            vec![Box::new(recipient) as Box<dyn age::Recipient + Send>],
+        )
+        .expect("non-empty recipients");
 
     let mut output = Vec::new();
     let mut writer = encryptor
@@ -91,7 +95,10 @@ pub fn decrypt(data: &[u8], config: &EncryptionConfig) -> Result<Vec<u8>, Encryp
     if !config.enabled {
         return Ok(data.to_vec());
     }
-    let identity_path = config.identity.as_ref().ok_or(EncryptionError::NoIdentity)?;
+    let identity_path = config
+        .identity
+        .as_ref()
+        .ok_or(EncryptionError::NoIdentity)?;
     let content = std::fs::read_to_string(identity_path)?;
     let identity = parse_identity(&content)?;
 

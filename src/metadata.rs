@@ -73,12 +73,12 @@ pub fn save_metadata_to(meta: &Metadata, path: &Path) -> Result<(), MetadataErro
 
     let json = serde_json::to_string_pretty(meta)?;
 
-    let dir = path
-        .parent()
-        .ok_or_else(|| MetadataError::Io(std::io::Error::new(
+    let dir = path.parent().ok_or_else(|| {
+        MetadataError::Io(std::io::Error::new(
             std::io::ErrorKind::InvalidInput,
             "metadata path has no parent directory",
-        )))?;
+        ))
+    })?;
 
     let tmp = tempfile::NamedTempFile::new_in(dir)?;
     std::fs::write(tmp.path(), json.as_bytes())?;

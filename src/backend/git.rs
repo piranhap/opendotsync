@@ -6,7 +6,12 @@ use super::{BackendError, SnapshotMeta, StorageBackend};
 pub struct GitBackend;
 
 impl StorageBackend for GitBackend {
-    fn push(&self, _profile: &str, _data: &[u8], _message: Option<&str>) -> Result<u64, BackendError> {
+    fn push(
+        &self,
+        _profile: &str,
+        _data: &[u8],
+        _message: Option<&str>,
+    ) -> Result<u64, BackendError> {
         Err(BackendError::NotImplemented("git".into()))
     }
     fn pull(&self, _profile: &str, _version: Option<u64>) -> Result<(u64, Vec<u8>), BackendError> {

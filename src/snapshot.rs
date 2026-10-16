@@ -50,11 +50,9 @@ pub fn create_snapshot(
 }
 
 fn read_with_retry(path: &Path, relative: &str) -> Result<Vec<u8>, SnapshotError> {
-    let pre_hash = crate::collector::compute_checksum(path)
-        .map_err(|_| SnapshotError::Io(std::io::Error::new(
-            std::io::ErrorKind::Other,
-            format!("failed to hash {relative}"),
-        )))?;
+    let pre_hash = crate::collector::compute_checksum(path).map_err(|_| {
+        SnapshotError::Io(std::io::Error::other(format!("failed to hash {relative}")))
+    })?;
 
     let data = std::fs::read(path)?;
 
@@ -69,11 +67,11 @@ fn read_with_retry(path: &Path, relative: &str) -> Result<Vec<u8>, SnapshotError
         std::thread::sleep(std::time::Duration::from_millis(100));
 
         let data = std::fs::read(path)?;
-        let hash_before = crate::collector::compute_checksum(path)
-            .map_err(|_| SnapshotError::Io(std::io::Error::new(
-                std::io::ErrorKind::Other,
-                format!("failed to hash {relative} on retry {attempt}"),
-            )))?;
+        let hash_before = crate::collector::compute_checksum(path).map_err(|_| {
+            SnapshotError::Io(std::io::Error::other(format!(
+                "failed to hash {relative} on retry {attempt}"
+            )))
+        })?;
         let hash_after = crate::collector::compute_checksum_bytes(&data);
 
         if hash_before == hash_after {
@@ -116,7 +114,10 @@ pub fn list_snapshot_contents(data: &[u8]) -> Result<Vec<String>, SnapshotError>
     let mut archive = tar::Archive::new(decoder);
 
     let mut paths = Vec::new();
-    for entry in archive.entries().map_err(|e| SnapshotError::Tar(e.to_string()))? {
+    for entry in archive
+        .entries()
+        .map_err(|e| SnapshotError::Tar(e.to_string()))?
+    {
         let entry = entry.map_err(|e| SnapshotError::Tar(e.to_string()))?;
         let path = entry
             .path()
@@ -134,7 +135,10 @@ pub fn read_file_from_snapshot(
     let decoder = zstd::Decoder::new(Cursor::new(data))?;
     let mut archive = tar::Archive::new(decoder);
 
-    for entry in archive.entries().map_err(|e| SnapshotError::Tar(e.to_string()))? {
+    for entry in archive
+        .entries()
+        .map_err(|e| SnapshotError::Tar(e.to_string()))?
+    {
         let mut entry = entry.map_err(|e| SnapshotError::Tar(e.to_string()))?;
         let path = entry
             .path()

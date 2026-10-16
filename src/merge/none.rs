@@ -1,8 +1,8 @@
 use std::path::Path;
 
+use super::{MergeError, MergeResult};
 use crate::collector::compute_checksum_bytes;
 use crate::conflicts;
-use super::{MergeError, MergeResult};
 
 pub fn merge(
     relative_path: &str,

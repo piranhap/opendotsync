@@ -2,7 +2,9 @@ use chrono::Utc;
 use std::process::Command;
 use tempfile::NamedTempFile;
 
-use super::{BackendError, BackendManifest, SnapshotMeta, StorageBackend};
+use super::{
+    run_captured, run_checked, BackendError, BackendManifest, SnapshotMeta, StorageBackend,
+};
 
 pub struct RcloneBackend {
     remote: String,
@@ -28,8 +30,7 @@ impl RcloneBackend {
         if !output.status.success() || output.stdout.is_empty() {
             return Ok(BackendManifest::default());
         }
-        serde_json::from_slice(&output.stdout)
-            .map_err(|e| BackendError::Manifest(e.to_string()))
+        serde_json::from_slice(&output.stdout).map_err(|e| BackendError::Manifest(e.to_string()))
     }
 
     fn save_manifest(&self, profile: &str, manifest: &BackendManifest) -> Result<(), BackendError> {
@@ -38,15 +39,10 @@ impl RcloneBackend {
         let tmp = NamedTempFile::new()?;
         std::fs::write(tmp.path(), json.as_bytes())?;
         let remote = self.remote_path(profile, "manifest.json");
-        let status = Command::new("rclone")
-            .args(["copyto", tmp.path().to_str().unwrap_or(""), &remote])
-            .status()?;
-        if !status.success() {
-            return Err(BackendError::Io(std::io::Error::new(
-                std::io::ErrorKind::Other,
-                "rclone copyto failed writing manifest",
-            )));
-        }
+        run_checked(
+            Command::new("rclone").args(["copyto", tmp.path().to_str().unwrap_or(""), &remote]),
+            "rclone copyto failed writing manifest",
+        )?;
         Ok(())
     }
 }
@@ -59,15 +55,10 @@ impl StorageBackend for RcloneBackend {
         let tmp = NamedTempFile::new()?;
         std::fs::write(tmp.path(), data)?;
         let remote = self.remote_path(profile, &Self::version_filename(new_version));
-        let status = Command::new("rclone")
-            .args(["copyto", tmp.path().to_str().unwrap_or(""), &remote])
-            .status()?;
-        if !status.success() {
-            return Err(BackendError::Io(std::io::Error::new(
-                std::io::ErrorKind::Other,
-                format!("rclone copyto failed for v{:03}", new_version),
-            )));
-        }
+        run_checked(
+            Command::new("rclone").args(["copyto", tmp.path().to_str().unwrap_or(""), &remote]),
+            &format!("rclone copyto failed for v{:03}", new_version),
+        )?;
 
         manifest.latest_version = new_version;
         manifest.snapshots.push(SnapshotMeta {
@@ -112,7 +103,7 @@ impl StorageBackend for RcloneBackend {
         let to_remove = manifest.snapshots.len() - keep;
         for snap in &manifest.snapshots[..to_remove] {
             let remote = self.remote_path(profile, &Self::version_filename(snap.version));
-            let _ = Command::new("rclone").args(["deletefile", &remote]).status();
+            let _ = run_captured(Command::new("rclone").args(["deletefile", &remote]));
         }
         manifest.snapshots = manifest.snapshots[to_remove..].to_vec();
         self.save_manifest(profile, &manifest)
@@ -120,6 +111,10 @@ impl StorageBackend for RcloneBackend {
 
     fn latest_version(&self, profile: &str) -> Result<Option<u64>, BackendError> {
         let manifest = self.load_manifest(profile)?;
-        Ok(if manifest.latest_version == 0 { None } else { Some(manifest.latest_version) })
+        Ok(if manifest.latest_version == 0 {
+            None
+        } else {
+            Some(manifest.latest_version)
+        })
     }
 }

@@ -47,10 +47,7 @@ pub enum BackendConfig {
     #[serde(rename = "git")]
     Git { repo: String },
     #[serde(rename = "rclone")]
-    Rclone {
-        remote: String,
-        path: String,
-    },
+    Rclone { remote: String, path: String },
     #[serde(rename = "github")]
     GitHub {
         repo: String,

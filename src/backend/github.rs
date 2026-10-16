@@ -2,7 +2,9 @@ use chrono::Utc;
 use std::path::PathBuf;
 use std::process::Command;
 
-use super::{BackendError, BackendManifest, SnapshotMeta, StorageBackend};
+use super::{
+    run_captured, run_checked, BackendError, BackendManifest, SnapshotMeta, StorageBackend,
+};
 
 pub struct GitHubBackend {
     repo: String,
@@ -16,7 +18,11 @@ impl GitHubBackend {
         // path and .git/config. Auth is resolved at runtime from the environment.
         let repo = Self::strip_credentials(&repo);
         let cache_dir = Self::cache_dir_for_repo(&repo);
-        GitHubBackend { repo, branch, cache_dir }
+        GitHubBackend {
+            repo,
+            branch,
+            cache_dir,
+        }
     }
 
     /// Remove a `user[:password]@` userinfo component from an http(s) URL.
@@ -104,12 +110,14 @@ impl GitHubBackend {
         if self.cache_dir.join(".git").exists() {
             // Sync with remote via an explicit (possibly authenticated) URL so the
             // token is never persisted in .git/config. Ignore failures on a new repo.
-            let _ = Command::new("git")
-                .args([
-                    "-C", self.cache_dir.to_str().unwrap_or(""),
-                    "pull", "--ff-only", &auth_url, &self.branch,
-                ])
-                .status();
+            let _ = run_captured(Command::new("git").args([
+                "-C",
+                self.cache_dir.to_str().unwrap_or(""),
+                "pull",
+                "--ff-only",
+                &auth_url,
+                &self.branch,
+            ]));
             return Ok(());
         }
 
@@ -118,33 +126,37 @@ impl GitHubBackend {
         }
 
         // Try cloning a specific branch first; fall back to default branch
-        let ok = Command::new("git")
-            .args(["clone", "--branch", &self.branch, &auth_url,
-                   self.cache_dir.to_str().unwrap_or("")])
-            .status()
-            .map(|s| s.success())
-            .unwrap_or(false);
+        let ok = run_captured(Command::new("git").args([
+            "clone",
+            "--branch",
+            &self.branch,
+            &auth_url,
+            self.cache_dir.to_str().unwrap_or(""),
+        ]))
+        .map(|o| o.status.success())
+        .unwrap_or(false);
 
         if !ok {
-            let status = Command::new("git")
-                .args(["clone", &auth_url, self.cache_dir.to_str().unwrap_or("")])
-                .status()?;
-            if !status.success() {
-                return Err(BackendError::Io(std::io::Error::new(
-                    std::io::ErrorKind::Other,
-                    format!("git clone failed for {}", self.repo),
-                )));
-            }
+            run_checked(
+                Command::new("git").args([
+                    "clone",
+                    &auth_url,
+                    self.cache_dir.to_str().unwrap_or(""),
+                ]),
+                &format!("git clone failed for {}", self.repo),
+            )?;
         }
 
         // `git clone` records the (authenticated) clone URL as origin. Reset it to
         // the credential-free URL so the token is not left behind in .git/config.
-        let _ = Command::new("git")
-            .args([
-                "-C", self.cache_dir.to_str().unwrap_or(""),
-                "remote", "set-url", "origin", &self.repo,
-            ])
-            .status();
+        let _ = run_captured(Command::new("git").args([
+            "-C",
+            self.cache_dir.to_str().unwrap_or(""),
+            "remote",
+            "set-url",
+            "origin",
+            &self.repo,
+        ]));
         Ok(())
     }
 
@@ -182,12 +194,20 @@ impl GitHubBackend {
             .map(|o| !o.stdout.is_empty())
             .unwrap_or(false);
         if !has_email {
-            let _ = Command::new("git")
-                .args(["-C", repo, "config", "user.email", "opendotsync@localhost"])
-                .status();
-            let _ = Command::new("git")
-                .args(["-C", repo, "config", "user.name", "opendotsync"])
-                .status();
+            let _ = run_captured(Command::new("git").args([
+                "-C",
+                repo,
+                "config",
+                "user.email",
+                "opendotsync@localhost",
+            ]));
+            let _ = run_captured(Command::new("git").args([
+                "-C",
+                repo,
+                "config",
+                "user.name",
+                "opendotsync",
+            ]));
         }
     }
 
@@ -196,40 +216,32 @@ impl GitHubBackend {
 
         self.ensure_git_identity();
 
-        let status = Command::new("git").args(["-C", repo, "add", "-A"]).status()?;
-        if !status.success() {
-            return Err(self.git_err("git add -A failed"));
-        }
+        run_checked(
+            Command::new("git").args(["-C", repo, "add", "-A"]),
+            "git add -A failed",
+        )?;
 
         // Only commit if there are staged changes
-        let nothing_staged = Command::new("git")
-            .args(["-C", repo, "diff", "--cached", "--quiet"])
-            .status()?
-            .success();
+        let nothing_staged =
+            run_captured(Command::new("git").args(["-C", repo, "diff", "--cached", "--quiet"]))?
+                .status
+                .success();
 
         if !nothing_staged {
-            let status = Command::new("git")
-                .args(["-C", repo, "commit", "-m", message])
-                .status()?;
-            if !status.success() {
-                return Err(self.git_err("git commit failed"));
-            }
+            run_checked(
+                Command::new("git").args(["-C", repo, "commit", "-m", message]),
+                "git commit failed",
+            )?;
         }
 
         // Push to an explicit (possibly authenticated) URL rather than "origin"
         // so the token is never persisted in .git/config.
         let auth_url = self.auth_url();
-        let status = Command::new("git")
-            .args(["-C", repo, "push", &auth_url, &self.branch])
-            .status()?;
-        if !status.success() {
-            return Err(self.git_err("git push failed — check credentials and repo access"));
-        }
+        run_checked(
+            Command::new("git").args(["-C", repo, "push", &auth_url, &self.branch]),
+            "git push failed — check credentials and repo access",
+        )?;
         Ok(())
-    }
-
-    fn git_err(&self, msg: &str) -> BackendError {
-        BackendError::Io(std::io::Error::new(std::io::ErrorKind::Other, msg))
     }
 
     fn init_repo_if_needed(&self) -> Result<(), BackendError> {
@@ -239,9 +251,10 @@ impl GitHubBackend {
         std::fs::create_dir_all(&self.cache_dir)?;
         let d = self.cache_dir.to_str().unwrap_or("");
         let run = |args: &[&str]| -> Result<(), BackendError> {
-            if !Command::new("git").args(args).status()?.success() {
-                return Err(self.git_err(&format!("git {} failed", args.join(" "))));
-            }
+            run_checked(
+                Command::new("git").args(args),
+                &format!("git {} failed", args.join(" ")),
+            )?;
             Ok(())
         };
         run(&["-C", d, "init", "-b", &self.branch])?;
@@ -293,7 +306,9 @@ impl StorageBackend for GitHubBackend {
                 manifest.latest_version
             }
         };
-        let path = self.profile_dir(profile).join(Self::version_filename(target));
+        let path = self
+            .profile_dir(profile)
+            .join(Self::version_filename(target));
         if !path.exists() {
             return Err(BackendError::VersionNotFound(target));
         }
@@ -314,7 +329,9 @@ impl StorageBackend for GitHubBackend {
         manifest.snapshots.sort_by_key(|s| s.version);
         let to_remove = manifest.snapshots.len() - keep;
         for snap in &manifest.snapshots[..to_remove] {
-            let path = self.profile_dir(profile).join(Self::version_filename(snap.version));
+            let path = self
+                .profile_dir(profile)
+                .join(Self::version_filename(snap.version));
             if path.exists() {
                 std::fs::remove_file(&path)?;
             }
@@ -327,7 +344,11 @@ impl StorageBackend for GitHubBackend {
     fn latest_version(&self, profile: &str) -> Result<Option<u64>, BackendError> {
         self.ensure_clone()?;
         let manifest = self.load_manifest(profile)?;
-        Ok(if manifest.latest_version == 0 { None } else { Some(manifest.latest_version) })
+        Ok(if manifest.latest_version == 0 {
+            None
+        } else {
+            Some(manifest.latest_version)
+        })
     }
 }
 
@@ -370,14 +391,19 @@ mod tests {
             "https://github.com/u/r.git"
         ));
         // SSH form is not treated as embedded HTTP credentials.
-        assert!(!GitHubBackend::has_embedded_credentials("git@github.com:u/r.git"));
+        assert!(!GitHubBackend::has_embedded_credentials(
+            "git@github.com:u/r.git"
+        ));
     }
 
     #[test]
     fn cache_dir_never_contains_token() {
         let dir = GitHubBackend::cache_dir_for_repo("https://ghp_SECRET@github.com/u/r.git");
         let s = dir.to_string_lossy();
-        assert!(!s.contains("ghp_SECRET"), "token leaked into cache path: {s}");
+        assert!(
+            !s.contains("ghp_SECRET"),
+            "token leaked into cache path: {s}"
+        );
     }
 
     #[test]

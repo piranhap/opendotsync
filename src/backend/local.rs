@@ -27,16 +27,12 @@ impl LocalBackend {
             return Ok(BackendManifest::default());
         }
         let contents = std::fs::read_to_string(&path)?;
-        let manifest: BackendManifest = serde_json::from_str(&contents)
-            .map_err(|e| BackendError::Manifest(e.to_string()))?;
+        let manifest: BackendManifest =
+            serde_json::from_str(&contents).map_err(|e| BackendError::Manifest(e.to_string()))?;
         Ok(manifest)
     }
 
-    fn save_manifest(
-        &self,
-        profile: &str,
-        manifest: &BackendManifest,
-    ) -> Result<(), BackendError> {
+    fn save_manifest(&self, profile: &str, manifest: &BackendManifest) -> Result<(), BackendError> {
         let path = self.manifest_path(profile);
         let json = serde_json::to_string_pretty(manifest)
             .map_err(|e| BackendError::Manifest(e.to_string()))?;
@@ -63,12 +59,7 @@ impl LocalBackend {
 }
 
 impl StorageBackend for LocalBackend {
-    fn push(
-        &self,
-        profile: &str,
-        data: &[u8],
-        message: Option<&str>,
-    ) -> Result<u64, BackendError> {
+    fn push(&self, profile: &str, data: &[u8], message: Option<&str>) -> Result<u64, BackendError> {
         let dir = self.profile_dir(profile);
         std::fs::create_dir_all(&dir)?;
 
@@ -95,11 +86,7 @@ impl StorageBackend for LocalBackend {
         Ok(new_version)
     }
 
-    fn pull(
-        &self,
-        profile: &str,
-        version: Option<u64>,
-    ) -> Result<(u64, Vec<u8>), BackendError> {
+    fn pull(&self, profile: &str, version: Option<u64>) -> Result<(u64, Vec<u8>), BackendError> {
         let manifest = self.load_manifest(profile)?;
 
         let target_version = match version {

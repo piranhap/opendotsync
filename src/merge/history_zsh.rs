@@ -69,8 +69,14 @@ mod tests {
     #[test]
     fn serialize_round_trip() {
         let entries = vec![
-            HistoryEntry { timestamp: 100, command: "echo hi".to_string() },
-            HistoryEntry { timestamp: 200, command: "cargo build".to_string() },
+            HistoryEntry {
+                timestamp: 100,
+                command: "echo hi".to_string(),
+            },
+            HistoryEntry {
+                timestamp: 200,
+                command: "cargo build".to_string(),
+            },
         ];
         let data = serialize(&entries);
         let parsed = parse(&data).unwrap();
