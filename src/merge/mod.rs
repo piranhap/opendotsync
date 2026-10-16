@@ -1,8 +1,8 @@
-pub mod none;
 pub mod history;
 pub mod history_bash;
-pub mod history_zsh;
 pub mod history_fish;
+pub mod history_zsh;
+pub mod none;
 mod union;
 
 use std::path::{Path, PathBuf};

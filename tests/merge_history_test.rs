@@ -1,7 +1,7 @@
-use opendotsync::merge::history::{HistoryEntry, three_way_merge};
+use opendotsync::merge::history::{three_way_merge, HistoryEntry};
 use opendotsync::merge::history_bash;
-use opendotsync::merge::history_zsh;
 use opendotsync::merge::history_fish;
+use opendotsync::merge::history_zsh;
 
 // ── Bash parser ──────────────────────────────────────────────────────────────
 
@@ -106,12 +106,24 @@ fn merge_no_overlap_from_fixtures() {
 fn merge_missing_ancestor_union() {
     let ancestor: Vec<HistoryEntry> = vec![];
     let local = vec![
-        HistoryEntry { timestamp: 100, command: "ls".into() },
-        HistoryEntry { timestamp: 200, command: "pwd".into() },
+        HistoryEntry {
+            timestamp: 100,
+            command: "ls".into(),
+        },
+        HistoryEntry {
+            timestamp: 200,
+            command: "pwd".into(),
+        },
     ];
     let remote = vec![
-        HistoryEntry { timestamp: 150, command: "git status".into() },
-        HistoryEntry { timestamp: 250, command: "cargo build".into() },
+        HistoryEntry {
+            timestamp: 150,
+            command: "git status".into(),
+        },
+        HistoryEntry {
+            timestamp: 250,
+            command: "cargo build".into(),
+        },
     ];
 
     let merged = three_way_merge(&local, &remote, &ancestor);
@@ -123,32 +135,61 @@ fn merge_missing_ancestor_union() {
 #[test]
 fn merge_dedup_within_60s_window() {
     let ancestor: Vec<HistoryEntry> = vec![];
-    let local = vec![HistoryEntry { timestamp: 1000, command: "cargo test".into() }];
+    let local = vec![HistoryEntry {
+        timestamp: 1000,
+        command: "cargo test".into(),
+    }];
     // same command, 30 seconds later — should be deduped
-    let remote = vec![HistoryEntry { timestamp: 1030, command: "cargo test".into() }];
+    let remote = vec![HistoryEntry {
+        timestamp: 1030,
+        command: "cargo test".into(),
+    }];
 
     let merged = three_way_merge(&local, &remote, &ancestor);
-    assert_eq!(merged.len(), 1, "duplicate within 60s window should be merged");
+    assert_eq!(
+        merged.len(),
+        1,
+        "duplicate within 60s window should be merged"
+    );
 }
 
 #[test]
 fn merge_no_dedup_outside_60s_window() {
     let ancestor: Vec<HistoryEntry> = vec![];
-    let local = vec![HistoryEntry { timestamp: 1000, command: "cargo test".into() }];
+    let local = vec![HistoryEntry {
+        timestamp: 1000,
+        command: "cargo test".into(),
+    }];
     // same command, 90 seconds later — should NOT be deduped
-    let remote = vec![HistoryEntry { timestamp: 1090, command: "cargo test".into() }];
+    let remote = vec![HistoryEntry {
+        timestamp: 1090,
+        command: "cargo test".into(),
+    }];
 
     let merged = three_way_merge(&local, &remote, &ancestor);
-    assert_eq!(merged.len(), 2, "same command 90s apart should not be deduplicated");
+    assert_eq!(
+        merged.len(),
+        2,
+        "same command 90s apart should not be deduplicated"
+    );
 }
 
 #[test]
 fn merge_empty_local_keeps_remote() {
-    let ancestor = vec![HistoryEntry { timestamp: 100, command: "ls".into() }];
+    let ancestor = vec![HistoryEntry {
+        timestamp: 100,
+        command: "ls".into(),
+    }];
     let local: Vec<HistoryEntry> = vec![];
     let remote = vec![
-        HistoryEntry { timestamp: 100, command: "ls".into() },
-        HistoryEntry { timestamp: 200, command: "pwd".into() },
+        HistoryEntry {
+            timestamp: 100,
+            command: "ls".into(),
+        },
+        HistoryEntry {
+            timestamp: 200,
+            command: "pwd".into(),
+        },
     ];
 
     let merged = three_way_merge(&local, &remote, &ancestor);
@@ -158,10 +199,19 @@ fn merge_empty_local_keeps_remote() {
 
 #[test]
 fn merge_empty_remote_keeps_local() {
-    let ancestor = vec![HistoryEntry { timestamp: 100, command: "ls".into() }];
+    let ancestor = vec![HistoryEntry {
+        timestamp: 100,
+        command: "ls".into(),
+    }];
     let local = vec![
-        HistoryEntry { timestamp: 100, command: "ls".into() },
-        HistoryEntry { timestamp: 200, command: "vim".into() },
+        HistoryEntry {
+            timestamp: 100,
+            command: "ls".into(),
+        },
+        HistoryEntry {
+            timestamp: 200,
+            command: "vim".into(),
+        },
     ];
     let remote: Vec<HistoryEntry> = vec![];
 

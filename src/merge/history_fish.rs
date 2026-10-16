@@ -14,7 +14,10 @@ pub fn parse(data: &[u8]) -> Option<Vec<HistoryEntry>> {
         let line = line.trim();
         if let Some(cmd) = line.strip_prefix("- cmd:") {
             if let (Some(cmd), Some(ts)) = (current_cmd.take(), current_ts.take()) {
-                entries.push(HistoryEntry { timestamp: ts, command: cmd });
+                entries.push(HistoryEntry {
+                    timestamp: ts,
+                    command: cmd,
+                });
             }
             current_cmd = Some(cmd.trim().to_string());
         } else if let Some(ts_str) = line.strip_prefix("when:") {
@@ -25,7 +28,10 @@ pub fn parse(data: &[u8]) -> Option<Vec<HistoryEntry>> {
     }
 
     if let (Some(cmd), Some(ts)) = (current_cmd, current_ts) {
-        entries.push(HistoryEntry { timestamp: ts, command: cmd });
+        entries.push(HistoryEntry {
+            timestamp: ts,
+            command: cmd,
+        });
     }
 
     if entries.is_empty() {
@@ -64,9 +70,10 @@ mod tests {
 
     #[test]
     fn serialize_round_trip() {
-        let entries = vec![
-            HistoryEntry { timestamp: 100, command: "echo hello".to_string() },
-        ];
+        let entries = vec![HistoryEntry {
+            timestamp: 100,
+            command: "echo hello".to_string(),
+        }];
         let data = serialize(&entries);
         let parsed = parse(&data).unwrap();
         assert_eq!(parsed[0].command, "echo hello");

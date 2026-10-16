@@ -14,9 +14,7 @@ pub fn stash_conflict(
     relative_path: &str,
     content: &[u8],
 ) -> Result<PathBuf, ConflictError> {
-    let conflict_dir = state_dir
-        .join("conflicts")
-        .join(format!("v{version}"));
+    let conflict_dir = state_dir.join("conflicts").join(format!("v{version}"));
 
     let conflict_path = conflict_dir.join(relative_path);
 
@@ -55,9 +53,7 @@ pub fn list_conflicts_for_version(
     state_dir: &Path,
     version: u64,
 ) -> Result<Vec<String>, ConflictError> {
-    let version_dir = state_dir
-        .join("conflicts")
-        .join(format!("v{version}"));
+    let version_dir = state_dir.join("conflicts").join(format!("v{version}"));
 
     if !version_dir.exists() {
         return Ok(Vec::new());

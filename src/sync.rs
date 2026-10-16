@@ -8,15 +8,18 @@ use crate::backend::github::GitHubBackend;
 use crate::backend::local::LocalBackend;
 use crate::backend::rclone::RcloneBackend;
 use crate::backend::{BackendError, StorageBackend};
-use crate::retention;
 use crate::collector;
 use crate::config::{AppConfig, BackendConfig, ConfigError};
 use crate::conflicts;
 use crate::encryption;
 use crate::merge::{self, MergeResult};
 use crate::metadata::{self, Metadata, MetadataError};
-use crate::paths::{self, PathsList, PathsError};
+use crate::paths::{self, PathsError, PathsList};
+use crate::retention;
 use crate::snapshot::{self, SnapshotError};
+
+/// The `(modified, added, deleted)` path lists returned by [`cmd_diff`].
+pub type DiffResult = (Vec<String>, Vec<String>, Vec<String>);
 
 #[derive(Debug, Error)]
 pub enum SyncError {
@@ -46,7 +49,9 @@ pub enum SyncError {
     Encryption(#[from] crate::encryption::EncryptionError),
     #[error("profile error: {0}")]
     Profile(#[from] crate::profiles::ProfileError),
-    #[error("pull introduced {0} conflict(s) — resolve with `opendotsync conflicts` then push again")]
+    #[error(
+        "pull introduced {0} conflict(s) — resolve with `opendotsync conflicts` then push again"
+    )]
     PullConflicts(usize),
 }
 
@@ -200,9 +205,11 @@ pub fn cmd_init(
         "github" => {
             let raw_repo = backend_path
                 .map(|p| p.to_string_lossy().to_string())
-                .ok_or_else(|| SyncError::UnsupportedBackend(
-                    "github backend requires --path <repo-url>".to_string(),
-                ))?;
+                .ok_or_else(|| {
+                    SyncError::UnsupportedBackend(
+                        "github backend requires --path <repo-url>".to_string(),
+                    )
+                })?;
             GitHubBackend::validate_repo_url(&raw_repo)?;
             // Never persist credentials embedded in the URL — strip them and tell
             // the user how to supply a token securely at runtime. (Issue #2)
@@ -214,7 +221,10 @@ pub fn cmd_init(
                      or configure git's credential helper / ~/.git-credentials."
                 );
             }
-            BackendConfig::GitHub { repo, branch: "main".to_string() }
+            BackendConfig::GitHub {
+                repo,
+                branch: "main".to_string(),
+            }
         }
         other => return Err(SyncError::UnsupportedBackend(other.to_string())),
     };
@@ -295,8 +305,7 @@ pub fn cmd_push(
     message: Option<&str>,
     no_auto_pull: bool,
 ) -> Result<u64, SyncError> {
-    let meta = metadata::load_metadata()?
-        .ok_or(SyncError::NotInitialized)?;
+    let meta = metadata::load_metadata()?.ok_or(SyncError::NotInitialized)?;
 
     // If the remote is ahead, pull+merge first so the push is fast-forward — unless
     // the user forced or opted out. This mirrors `git pull --rebase` ergonomics so
@@ -387,8 +396,7 @@ pub fn cmd_pull(
     version: Option<u64>,
     overwrite: bool,
 ) -> Result<PullResult, SyncError> {
-    let meta = metadata::load_metadata()?
-        .ok_or(SyncError::NotInitialized)?;
+    let meta = metadata::load_metadata()?.ok_or(SyncError::NotInitialized)?;
 
     let backend = create_backend(config)?;
     let (remote_version, remote_data) = backend.pull(&meta.profile, version)?;
@@ -508,8 +516,7 @@ pub fn cmd_status(
     paths_list: &PathsList,
     home_dir: &Path,
 ) -> Result<StatusReport, SyncError> {
-    let meta = metadata::load_metadata()?
-        .ok_or(SyncError::NotInitialized)?;
+    let meta = metadata::load_metadata()?.ok_or(SyncError::NotInitialized)?;
 
     let backend = create_backend(config)?;
     let remote_version = backend.latest_version(&meta.profile)?;
@@ -541,8 +548,7 @@ pub fn cmd_status(
     changed.sort();
 
     let state_dir = metadata::state_dir();
-    let pending_conflicts = conflicts::list_conflict_versions(&state_dir)
-        .unwrap_or_default();
+    let pending_conflicts = conflicts::list_conflict_versions(&state_dir).unwrap_or_default();
 
     Ok(StatusReport {
         profile: meta.profile,
@@ -562,8 +568,7 @@ pub fn cmd_sync(
     quiet: bool,
 ) -> Result<(), SyncError> {
     if dry_run {
-        let meta = metadata::load_metadata()?
-            .ok_or(SyncError::NotInitialized)?;
+        let meta = metadata::load_metadata()?.ok_or(SyncError::NotInitialized)?;
         let files = collector::collect_files(home_dir, paths_list)?;
         let current: std::collections::HashMap<String, String> = files
             .iter()
@@ -614,7 +619,10 @@ pub fn cmd_sync(
                     );
                     continue;
                 }
-                return Err(SyncError::Backend(BackendError::VersionConflict { local, remote }));
+                return Err(SyncError::Backend(BackendError::VersionConflict {
+                    local,
+                    remote,
+                }));
             }
             Err(e) => return Err(e),
         }
@@ -630,11 +638,18 @@ pub fn cmd_profiles_merge(
 ) -> Result<(), SyncError> {
     let backend = create_backend(config)?;
     let (_version, data) = backend.pull(from_profile, None)?;
-    backend.push(to_profile, &data, Some(&format!("merged from {from_profile}")))?;
+    backend.push(
+        to_profile,
+        &data,
+        Some(&format!("merged from {from_profile}")),
+    )?;
     Ok(())
 }
 
-pub fn cmd_log(config: &AppConfig, n: usize) -> Result<Vec<crate::backend::SnapshotMeta>, SyncError> {
+pub fn cmd_log(
+    config: &AppConfig,
+    n: usize,
+) -> Result<Vec<crate::backend::SnapshotMeta>, SyncError> {
     let meta = metadata::load_metadata()?.ok_or(SyncError::NotInitialized)?;
     let backend = create_backend(config)?;
     let mut versions = backend.list_versions(&meta.profile)?;
@@ -648,7 +663,7 @@ pub fn cmd_diff(
     paths_list: &PathsList,
     home_dir: &Path,
     remote: bool,
-) -> Result<(Vec<String>, Vec<String>, Vec<String>), SyncError> {
+) -> Result<DiffResult, SyncError> {
     let meta = metadata::load_metadata()?.ok_or(SyncError::NotInitialized)?;
 
     let snapshot_data = if remote {
@@ -731,11 +746,11 @@ pub fn cmd_restore(
 pub fn cmd_conflicts_list() -> Result<Vec<(u64, Vec<String>)>, SyncError> {
     let state_dir = metadata::state_dir();
     let versions = conflicts::list_conflict_versions(&state_dir)
-        .map_err(|e| SyncError::Io(std::io::Error::new(std::io::ErrorKind::Other, e.to_string())))?;
+        .map_err(|e| SyncError::Io(std::io::Error::other(e.to_string())))?;
     let mut result = vec![];
     for v in versions {
         let files = conflicts::list_conflicts_for_version(&state_dir, v)
-            .map_err(|e| SyncError::Io(std::io::Error::new(std::io::ErrorKind::Other, e.to_string())))?;
+            .map_err(|e| SyncError::Io(std::io::Error::other(e.to_string())))?;
         result.push((v, files));
     }
     Ok(result)
@@ -744,13 +759,19 @@ pub fn cmd_conflicts_list() -> Result<Vec<(u64, Vec<String>)>, SyncError> {
 pub fn cmd_conflicts_show(home_dir: &Path, path: &str) -> Result<(Vec<u8>, Vec<u8>), SyncError> {
     let state_dir = metadata::state_dir();
     let versions = conflicts::list_conflict_versions(&state_dir)
-        .map_err(|e| SyncError::Io(std::io::Error::new(std::io::ErrorKind::Other, e.to_string())))?;
+        .map_err(|e| SyncError::Io(std::io::Error::other(e.to_string())))?;
 
     let latest_version = versions.last().copied().ok_or_else(|| {
-        SyncError::Io(std::io::Error::new(std::io::ErrorKind::NotFound, "no conflicts found"))
+        SyncError::Io(std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            "no conflicts found",
+        ))
     })?;
 
-    let stash_path = state_dir.join("conflicts").join(format!("v{latest_version}")).join(path);
+    let stash_path = state_dir
+        .join("conflicts")
+        .join(format!("v{latest_version}"))
+        .join(path);
     if !stash_path.exists() {
         return Err(SyncError::Io(std::io::Error::new(
             std::io::ErrorKind::NotFound,
@@ -758,7 +779,11 @@ pub fn cmd_conflicts_show(home_dir: &Path, path: &str) -> Result<(Vec<u8>, Vec<u
         )));
     }
     let local_path = home_dir.join(path);
-    let local = if local_path.exists() { std::fs::read(&local_path)? } else { vec![] };
+    let local = if local_path.exists() {
+        std::fs::read(&local_path)?
+    } else {
+        vec![]
+    };
     let remote = std::fs::read(&stash_path)?;
     Ok((local, remote))
 }
@@ -766,7 +791,7 @@ pub fn cmd_conflicts_show(home_dir: &Path, path: &str) -> Result<(Vec<u8>, Vec<u
 pub fn cmd_conflicts_accept_local(path: &str) -> Result<(), SyncError> {
     let state_dir = metadata::state_dir();
     let versions = conflicts::list_conflict_versions(&state_dir)
-        .map_err(|e| SyncError::Io(std::io::Error::new(std::io::ErrorKind::Other, e.to_string())))?;
+        .map_err(|e| SyncError::Io(std::io::Error::other(e.to_string())))?;
     for v in versions {
         let stash = state_dir.join("conflicts").join(format!("v{v}")).join(path);
         if stash.exists() {
@@ -779,13 +804,19 @@ pub fn cmd_conflicts_accept_local(path: &str) -> Result<(), SyncError> {
 pub fn cmd_conflicts_accept_remote(home_dir: &Path, path: &str) -> Result<(), SyncError> {
     let state_dir = metadata::state_dir();
     let versions = conflicts::list_conflict_versions(&state_dir)
-        .map_err(|e| SyncError::Io(std::io::Error::new(std::io::ErrorKind::Other, e.to_string())))?;
+        .map_err(|e| SyncError::Io(std::io::Error::other(e.to_string())))?;
 
     let latest = versions.last().copied().ok_or_else(|| {
-        SyncError::Io(std::io::Error::new(std::io::ErrorKind::NotFound, "no conflicts found"))
+        SyncError::Io(std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            "no conflicts found",
+        ))
     })?;
 
-    let stash = state_dir.join("conflicts").join(format!("v{latest}")).join(path);
+    let stash = state_dir
+        .join("conflicts")
+        .join(format!("v{latest}"))
+        .join(path);
     if !stash.exists() {
         return Err(SyncError::Io(std::io::Error::new(
             std::io::ErrorKind::NotFound,
@@ -800,15 +831,14 @@ pub fn cmd_conflicts_accept_remote(home_dir: &Path, path: &str) -> Result<(), Sy
     // Remove all stashes for this path
     for v in &versions {
         let s = state_dir.join("conflicts").join(format!("v{v}")).join(path);
-        if s.exists() { let _ = std::fs::remove_file(&s); }
+        if s.exists() {
+            let _ = std::fs::remove_file(&s);
+        }
     }
     Ok(())
 }
 
-pub fn cmd_du(
-    paths_list: &PathsList,
-    home_dir: &Path,
-) -> Result<DuReport, SyncError> {
+pub fn cmd_du(paths_list: &PathsList, home_dir: &Path) -> Result<DuReport, SyncError> {
     let files = collector::collect_files(home_dir, paths_list)?;
 
     let warnings: Vec<String> = collector::check_size_limits(&files)
@@ -822,7 +852,7 @@ pub fn cmd_du(
         .iter()
         .map(|f| (f.relative_path.clone(), f.size))
         .collect();
-    file_sizes.sort_by(|a, b| b.1.cmp(&a.1));
+    file_sizes.sort_by_key(|a| std::cmp::Reverse(a.1));
 
     Ok(DuReport {
         files: file_sizes,

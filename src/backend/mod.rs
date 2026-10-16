@@ -81,19 +81,10 @@ pub struct SnapshotMeta {
     pub message: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct BackendManifest {
     pub latest_version: u64,
     pub snapshots: Vec<SnapshotMeta>,
-}
-
-impl Default for BackendManifest {
-    fn default() -> Self {
-        BackendManifest {
-            latest_version: 0,
-            snapshots: Vec::new(),
-        }
-    }
 }
 
 #[cfg(all(test, unix))]

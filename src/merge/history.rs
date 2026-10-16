@@ -16,6 +16,11 @@ enum HistoryFormat {
     Fish,
 }
 
+type HistoryCodec = (
+    fn(&[u8]) -> Option<Vec<HistoryEntry>>,
+    fn(&[HistoryEntry]) -> Vec<u8>,
+);
+
 fn detect_format(relative_path: &str) -> HistoryFormat {
     let filename = Path::new(relative_path)
         .file_name()
@@ -29,9 +34,9 @@ fn detect_format(relative_path: &str) -> HistoryFormat {
 }
 
 fn contains_within_window(haystack: &[HistoryEntry], needle: &HistoryEntry, window: i64) -> bool {
-    haystack.iter().any(|e| {
-        e.command == needle.command && (e.timestamp - needle.timestamp).abs() <= window
-    })
+    haystack
+        .iter()
+        .any(|e| e.command == needle.command && (e.timestamp - needle.timestamp).abs() <= window)
 }
 
 pub fn three_way_merge(
@@ -79,10 +84,7 @@ pub fn merge(
 
     let format = detect_format(relative_path);
 
-    let (parse_fn, serialize_fn): (
-        fn(&[u8]) -> Option<Vec<HistoryEntry>>,
-        fn(&[HistoryEntry]) -> Vec<u8>,
-    ) = match format {
+    let (parse_fn, serialize_fn): HistoryCodec = match format {
         HistoryFormat::Bash => (super::history_bash::parse, super::history_bash::serialize),
         HistoryFormat::Zsh => (super::history_zsh::parse, super::history_zsh::serialize),
         HistoryFormat::Fish => (super::history_fish::parse, super::history_fish::serialize),
@@ -138,14 +140,29 @@ mod tests {
 
     #[test]
     fn three_way_no_overlap() {
-        let ancestor = vec![HistoryEntry { timestamp: 100, command: "ls".into() }];
+        let ancestor = vec![HistoryEntry {
+            timestamp: 100,
+            command: "ls".into(),
+        }];
         let local = vec![
-            HistoryEntry { timestamp: 100, command: "ls".into() },
-            HistoryEntry { timestamp: 200, command: "cd /tmp".into() },
+            HistoryEntry {
+                timestamp: 100,
+                command: "ls".into(),
+            },
+            HistoryEntry {
+                timestamp: 200,
+                command: "cd /tmp".into(),
+            },
         ];
         let remote = vec![
-            HistoryEntry { timestamp: 100, command: "ls".into() },
-            HistoryEntry { timestamp: 300, command: "git status".into() },
+            HistoryEntry {
+                timestamp: 100,
+                command: "ls".into(),
+            },
+            HistoryEntry {
+                timestamp: 300,
+                command: "git status".into(),
+            },
         ];
 
         let merged = three_way_merge(&local, &remote, &ancestor);
@@ -158,8 +175,14 @@ mod tests {
     #[test]
     fn three_way_dedup_within_60s_window() {
         let ancestor = vec![];
-        let local = vec![HistoryEntry { timestamp: 100, command: "echo hello".into() }];
-        let remote = vec![HistoryEntry { timestamp: 130, command: "echo hello".into() }];
+        let local = vec![HistoryEntry {
+            timestamp: 100,
+            command: "echo hello".into(),
+        }];
+        let remote = vec![HistoryEntry {
+            timestamp: 130,
+            command: "echo hello".into(),
+        }];
 
         let merged = three_way_merge(&local, &remote, &ancestor);
         assert_eq!(merged.len(), 1);
@@ -168,8 +191,14 @@ mod tests {
     #[test]
     fn three_way_no_ancestor_union() {
         let ancestor = vec![];
-        let local = vec![HistoryEntry { timestamp: 100, command: "ls".into() }];
-        let remote = vec![HistoryEntry { timestamp: 200, command: "pwd".into() }];
+        let local = vec![HistoryEntry {
+            timestamp: 100,
+            command: "ls".into(),
+        }];
+        let remote = vec![HistoryEntry {
+            timestamp: 200,
+            command: "pwd".into(),
+        }];
 
         let merged = three_way_merge(&local, &remote, &ancestor);
         assert_eq!(merged.len(), 2);
@@ -180,8 +209,14 @@ mod tests {
     #[test]
     fn merged_entries_sorted_by_timestamp() {
         let ancestor = vec![];
-        let local = vec![HistoryEntry { timestamp: 300, command: "last".into() }];
-        let remote = vec![HistoryEntry { timestamp: 100, command: "first".into() }];
+        let local = vec![HistoryEntry {
+            timestamp: 300,
+            command: "last".into(),
+        }];
+        let remote = vec![HistoryEntry {
+            timestamp: 100,
+            command: "first".into(),
+        }];
 
         let merged = three_way_merge(&local, &remote, &ancestor);
         assert_eq!(merged[0].command, "first");

@@ -78,10 +78,7 @@ fn collect_directory(
 
     // Skip directory symlinks (Section 10.4)
     if metadata.is_symlink() {
-        log::warn!(
-            "Skipping directory symlink: {}",
-            dir_path.display()
-        );
+        log::warn!("Skipping directory symlink: {}", dir_path.display());
         return Ok(());
     }
 
@@ -123,10 +120,7 @@ fn collect_directory(
                 source: e,
             })?;
             if real_meta.is_dir() {
-                log::warn!(
-                    "Skipping directory symlink: {}",
-                    absolute.display()
-                );
+                log::warn!("Skipping directory symlink: {}", absolute.display());
                 continue;
             }
         }
@@ -165,11 +159,10 @@ fn collect_single_file(
         return Ok(());
     }
 
-    let symlink_meta =
-        std::fs::symlink_metadata(file_path).map_err(|e| CollectorError::Io {
-            path: file_path.to_path_buf(),
-            source: e,
-        })?;
+    let symlink_meta = std::fs::symlink_metadata(file_path).map_err(|e| CollectorError::Io {
+        path: file_path.to_path_buf(),
+        source: e,
+    })?;
 
     // Skip broken symlinks
     if symlink_meta.is_symlink() && !file_path.exists() {
@@ -183,10 +176,7 @@ fn collect_single_file(
             source: e,
         })?;
         if real_meta.is_dir() {
-            log::warn!(
-                "Skipping directory symlink: {}",
-                file_path.display()
-            );
+            log::warn!("Skipping directory symlink: {}", file_path.display());
             return Ok(());
         }
     }

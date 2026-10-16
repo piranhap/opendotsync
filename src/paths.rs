@@ -17,18 +17,13 @@ pub enum PathsError {
     InvalidPattern(String),
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum MergeType {
+    #[default]
     None,
     History,
     Union,
-}
-
-impl Default for MergeType {
-    fn default() -> Self {
-        MergeType::None
-    }
 }
 
 #[derive(Debug, Clone)]
@@ -69,9 +64,10 @@ impl From<RawPathsList> for PathsList {
                     merge_type: MergeType::None,
                 },
                 RawPathEntry::WithType(map) => {
-                    let (path, merge_type) = map.into_iter().next().unwrap_or_else(|| {
-                        ("".to_string(), MergeType::None)
-                    });
+                    let (path, merge_type) = map
+                        .into_iter()
+                        .next()
+                        .unwrap_or_else(|| ("".to_string(), MergeType::None));
                     PathEntry { path, merge_type }
                 }
             })
@@ -90,9 +86,7 @@ pub fn default_paths_path() -> PathBuf {
 }
 
 pub fn load_paths(path: Option<&Path>) -> Result<PathsList, PathsError> {
-    let path = path
-        .map(PathBuf::from)
-        .unwrap_or_else(default_paths_path);
+    let path = path.map(PathBuf::from).unwrap_or_else(default_paths_path);
 
     if !path.exists() {
         return Err(PathsError::NotFound(path));
@@ -158,18 +152,27 @@ pub fn save_paths(path: &Path, paths_list: &PathsList) -> Result<(), PathsError>
                     MergeType::None => "none",
                 };
                 let mut map = Mapping::new();
-                map.insert(Value::String(entry.path.clone()), Value::String(mt.to_string()));
+                map.insert(
+                    Value::String(entry.path.clone()),
+                    Value::String(mt.to_string()),
+                );
                 Value::Mapping(map)
             }
         })
         .collect();
 
     let mut root = Mapping::new();
-    root.insert(Value::String("include".into()), Value::Sequence(include_values));
+    root.insert(
+        Value::String("include".into()),
+        Value::Sequence(include_values),
+    );
 
     if !paths_list.exclude.is_empty() {
-        let excl: Vec<Value> =
-            paths_list.exclude.iter().map(|s| Value::String(s.clone())).collect();
+        let excl: Vec<Value> = paths_list
+            .exclude
+            .iter()
+            .map(|s| Value::String(s.clone()))
+            .collect();
         root.insert(Value::String("exclude".into()), Value::Sequence(excl));
     }
 
@@ -237,7 +240,10 @@ pub fn is_excluded(paths_list: &PathsList, file_path: &str) -> bool {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SyncDecision {
     /// File is on the allowlist and not blocked. Carries the matched entry path and merge type.
-    Synced { matched: String, merge_type: MergeType },
+    Synced {
+        matched: String,
+        merge_type: MergeType,
+    },
     /// File matches the allowlist but is blocked by a blacklist pattern.
     Blocked { pattern: String },
     /// File is not on the allowlist at all.

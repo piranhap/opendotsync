@@ -35,10 +35,10 @@ pub fn detect_profile(config: &AppConfig) -> Option<String> {
 }
 
 fn glob_match(pattern: &str, s: &str) -> bool {
-    if pattern.ends_with('*') {
-        s.starts_with(&pattern[..pattern.len() - 1])
-    } else if pattern.starts_with('*') {
-        s.ends_with(&pattern[1..])
+    if let Some(prefix) = pattern.strip_suffix('*') {
+        s.starts_with(prefix)
+    } else if let Some(suffix) = pattern.strip_prefix('*') {
+        s.ends_with(suffix)
     } else {
         pattern == s
     }
@@ -98,7 +98,9 @@ mod tests {
 
     fn local_config(path: &std::path::Path) -> AppConfig {
         AppConfig {
-            backend: BackendConfig::Local { path: path.to_path_buf() },
+            backend: BackendConfig::Local {
+                path: path.to_path_buf(),
+            },
             profile: "default".to_string(),
             encryption: EncryptionConfig::default(),
             environments: vec![],
@@ -146,12 +148,16 @@ mod tests {
     #[test]
     fn detect_profile_no_panic() {
         let config = AppConfig {
-            backend: BackendConfig::Local { path: "/tmp".into() },
+            backend: BackendConfig::Local {
+                path: "/tmp".into(),
+            },
             profile: "default".to_string(),
             encryption: EncryptionConfig::default(),
             environments: vec![EnvironmentRule {
                 name: "work".to_string(),
-                match_rules: MatchRules { hostname: Some("NOMATCH-*".to_string()) },
+                match_rules: MatchRules {
+                    hostname: Some("NOMATCH-*".to_string()),
+                },
                 default_profile: "work".to_string(),
             }],
         };
