@@ -76,20 +76,36 @@ impl GitHubBackend {
     }
 
     pub fn validate_repo_url(repo: &str) -> Result<(), BackendError> {
-        // Catch mixed https://git@ format (a common mistake)
-        if repo.starts_with("https://git@") || repo.starts_with("http://git@") {
+        let clean = Self::strip_credentials(repo);
+        let host_path = clean
+            .strip_prefix("https://")
+            .or_else(|| clean.strip_prefix("http://"))
+            .or_else(|| clean.strip_prefix("ssh://git@"))
+            .and_then(|rest| rest.split_once('/'))
+            .or_else(|| {
+                clean
+                    .strip_prefix("git@")
+                    .and_then(|rest| rest.split_once(':'))
+            });
+        let valid = host_path.is_some_and(|(host, path)| {
+            !host.is_empty()
+                && path.trim_end_matches('/').split('/').count() >= 2
+                && path.split('/').take(2).all(|part| !part.is_empty())
+        }) && !repo.chars().any(char::is_whitespace);
+        // Catch mixed https://git@ format (a common mistake).
+        if !valid || repo.starts_with("https://git@") || repo.starts_with("http://git@") {
             return Err(BackendError::Io(std::io::Error::new(
                 std::io::ErrorKind::InvalidInput,
                 format!(
                     "invalid repo URL '{}'\n  Use SSH:   git@github.com:user/repo.git\n  Use HTTPS: https://github.com/user/repo.git",
-                    repo
+                    clean
                 ),
             )));
         }
         Ok(())
     }
 
-    fn cache_dir_for_repo(repo: &str) -> PathBuf {
+    pub(crate) fn cache_dir_for_repo(repo: &str) -> PathBuf {
         // Strip any embedded credential first so a token can never appear in the
         // on-disk cache directory name.
         let clean = Self::strip_credentials(repo);
@@ -103,6 +119,97 @@ impl GitHubBackend {
             .join("opendotsync")
             .join("github-cache")
             .join(slug)
+    }
+
+    // Diagnostics never use the persistent checkout or echo authenticated URLs.
+    fn diagnostic_git(&self, args: &[&str]) -> Result<std::process::Output, BackendError> {
+        let output = Command::new("git")
+            .env("GIT_TERMINAL_PROMPT", "0")
+            .env("GCM_INTERACTIVE", "never")
+            .env(
+                "GIT_SSH_COMMAND",
+                "ssh -o BatchMode=yes -o ConnectTimeout=10",
+            )
+            .args([
+                "-c",
+                "http.connectTimeout=10",
+                "-c",
+                "http.lowSpeedLimit=1",
+                "-c",
+                "http.lowSpeedTime=30",
+            ])
+            .args(args)
+            .output()?;
+        if !output.status.success() {
+            let mut error =
+                String::from_utf8_lossy(&output.stderr).replace(&self.auth_url(), &self.repo);
+            if let Some(token) = Self::token() {
+                error = error.replace(&token, "[redacted]");
+            }
+            return Err(BackendError::Io(std::io::Error::other(
+                error.trim().to_string(),
+            )));
+        }
+        Ok(output)
+    }
+
+    fn diagnostic_checkout(&self) -> Result<tempfile::TempDir, BackendError> {
+        let dir = tempfile::tempdir()?;
+        let path = dir.path().to_string_lossy();
+        self.diagnostic_git(&["init", "--quiet", &path])?;
+        let reference = format!("refs/heads/{}", self.branch);
+        let refs = self.diagnostic_git(&["ls-remote", "--", &self.auth_url(), &reference])?;
+        if !refs.stdout.is_empty() {
+            self.diagnostic_git(&[
+                "-C",
+                &path,
+                "fetch",
+                "--quiet",
+                "--depth=1",
+                "--",
+                &self.auth_url(),
+                &reference,
+            ])?;
+            self.diagnostic_git(&["-C", &path, "checkout", "--quiet", "--detach", "FETCH_HEAD"])?;
+        }
+        Ok(dir)
+    }
+
+    /// A dry run opens the remote receive service without updating any refs.
+    /// Server hooks and branch protection may still reject a subsequent real push.
+    pub fn check_push_access(&self) -> Result<(), BackendError> {
+        let dir = self.diagnostic_checkout()?;
+        let path = dir.path().to_string_lossy();
+        self.diagnostic_git(&[
+            "-C",
+            &path,
+            "-c",
+            "user.name=opendotsync",
+            "-c",
+            "user.email=opendotsync@localhost",
+            "-c",
+            "commit.gpgsign=false",
+            "-c",
+            "core.hooksPath=/dev/null",
+            "commit",
+            "--quiet",
+            "--allow-empty",
+            "-m",
+            "doctor probe",
+        ])?;
+        self.diagnostic_git(&[
+            "-C",
+            &path,
+            "-c",
+            "core.hooksPath=/dev/null",
+            "push",
+            "--dry-run",
+            "--no-verify",
+            "--",
+            &self.auth_url(),
+            &format!("HEAD:refs/heads/{}", self.branch),
+        ])?;
+        Ok(())
     }
 
     fn ensure_clone(&self) -> Result<(), BackendError> {
@@ -264,6 +371,21 @@ impl GitHubBackend {
 }
 
 impl StorageBackend for GitHubBackend {
+    fn check_connectivity(&self) -> Result<(), BackendError> {
+        self.diagnostic_git(&["ls-remote", "--", &self.auth_url()])?;
+        Ok(())
+    }
+
+    fn diagnostic_version(&self, profile: &str) -> Result<Option<u64>, BackendError> {
+        let dir = self.diagnostic_checkout()?;
+        let path = dir.path().join(profile).join("manifest.json");
+        if !path.exists() {
+            return Ok(None);
+        }
+        let manifest: BackendManifest = serde_json::from_slice(&std::fs::read(path)?)
+            .map_err(|e| BackendError::Manifest(e.to_string()))?;
+        Ok((manifest.latest_version != 0).then_some(manifest.latest_version))
+    }
     fn push(&self, profile: &str, data: &[u8], message: Option<&str>) -> Result<u64, BackendError> {
         if self.ensure_clone().is_err() {
             self.init_repo_if_needed()?;
@@ -414,5 +536,123 @@ mod tests {
         );
         assert_eq!(b.repo, "https://github.com/u/r.git");
         assert!(!b.cache_dir.to_string_lossy().contains("ghp_SECRET"));
+    }
+}
+
+#[cfg(test)]
+mod diagnostic_tests {
+    use super::*;
+
+    #[test]
+    fn validates_repo_formats_without_exposing_credentials() {
+        for url in [
+            "https://github.com/u/r.git",
+            "git@github.com:u/r.git",
+            "ssh://git@github.com/u/r.git",
+            "https://user:SECRET@github.com/u/r",
+        ] {
+            assert!(GitHubBackend::validate_repo_url(url).is_ok(), "{url}");
+        }
+        for url in [
+            "",
+            "u/r",
+            "--upload-pack=bad",
+            "https://github.com",
+            "https://git@github.com/u/r",
+            "https://user:SECRET@github.com",
+        ] {
+            let error = GitHubBackend::validate_repo_url(url)
+                .unwrap_err()
+                .to_string();
+            assert!(!error.contains("SECRET"), "{error}");
+        }
+    }
+
+    #[test]
+    fn diagnostics_use_temporary_checkout_and_never_push() {
+        let tmp = tempfile::tempdir().unwrap();
+        let remote = tmp.path().join("remote.git");
+        assert!(Command::new("git")
+            .args(["init", "--bare", "--quiet"])
+            .arg(&remote)
+            .status()
+            .unwrap()
+            .success());
+        let backend = GitHubBackend {
+            repo: remote.to_string_lossy().into_owned(),
+            branch: "main".into(),
+            cache_dir: tmp.path().join("cache"),
+        };
+        backend.check_connectivity().unwrap();
+        backend.check_push_access().unwrap();
+        assert_eq!(backend.diagnostic_version("default").unwrap(), None);
+        let before = Command::new("git")
+            .arg("ls-remote")
+            .arg(&remote)
+            .output()
+            .unwrap();
+        assert!(before.stdout.is_empty(), "dry run changed empty repository");
+        let seed = tmp.path().join("seed");
+        assert!(Command::new("git")
+            .args(["init", "--quiet", "-b", "main"])
+            .arg(&seed)
+            .status()
+            .unwrap()
+            .success());
+        std::fs::create_dir(seed.join("default")).unwrap();
+        std::fs::write(
+            seed.join("default/manifest.json"),
+            r#"{"latest_version":4,"snapshots":[]}"#,
+        )
+        .unwrap();
+        for args in [
+            vec!["add", "."],
+            vec![
+                "-c",
+                "user.name=test",
+                "-c",
+                "user.email=test@localhost",
+                "-c",
+                "commit.gpgsign=false",
+                "-c",
+                "core.hooksPath=/dev/null",
+                "commit",
+                "--quiet",
+                "-m",
+                "seed",
+            ],
+        ] {
+            assert!(Command::new("git")
+                .arg("-C")
+                .arg(&seed)
+                .args(args)
+                .status()
+                .unwrap()
+                .success());
+        }
+        assert!(Command::new("git")
+            .arg("-C")
+            .arg(&seed)
+            .arg("push")
+            .arg("--quiet")
+            .arg(&remote)
+            .arg("main")
+            .status()
+            .unwrap()
+            .success());
+        let before = Command::new("git")
+            .arg("ls-remote")
+            .arg(&remote)
+            .output()
+            .unwrap();
+        backend.check_push_access().unwrap();
+        assert_eq!(backend.diagnostic_version("default").unwrap(), Some(4));
+        let after = Command::new("git")
+            .arg("ls-remote")
+            .arg(&remote)
+            .output()
+            .unwrap();
+        assert_eq!(before.stdout, after.stdout);
+        assert!(!backend.cache_dir.exists());
     }
 }

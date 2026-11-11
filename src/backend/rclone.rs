@@ -48,6 +48,51 @@ impl RcloneBackend {
 }
 
 impl StorageBackend for RcloneBackend {
+    fn check_connectivity(&self) -> Result<(), BackendError> {
+        run_checked(
+            Command::new("rclone").args([
+                "lsd",
+                &format!("{}:{}", self.remote, self.path),
+                "--contimeout",
+                "10s",
+                "--timeout",
+                "30s",
+                "--retries",
+                "1",
+            ]),
+            "remote access failed — check rclone configuration and credentials",
+        )?;
+        Ok(())
+    }
+
+    fn diagnostic_version(&self, profile: &str) -> Result<Option<u64>, BackendError> {
+        let output = Command::new("rclone")
+            .args([
+                "cat",
+                &self.remote_path(profile, "manifest.json"),
+                "--contimeout",
+                "10s",
+                "--timeout",
+                "30s",
+                "--retries",
+                "1",
+            ])
+            .output()?;
+        // rclone uses exit code 3/4 for a missing directory/file.
+        if matches!(output.status.code(), Some(3 | 4)) {
+            return Ok(None);
+        }
+        if !output.status.success() {
+            return Err(BackendError::Io(std::io::Error::other(format!(
+                "reading remote manifest failed: {}",
+                String::from_utf8_lossy(&output.stderr).trim()
+            ))));
+        }
+        let manifest: BackendManifest = serde_json::from_slice(&output.stdout)
+            .map_err(|e| BackendError::Manifest(e.to_string()))?;
+        Ok((manifest.latest_version != 0).then_some(manifest.latest_version))
+    }
+
     fn push(&self, profile: &str, data: &[u8], message: Option<&str>) -> Result<u64, BackendError> {
         let mut manifest = self.load_manifest(profile)?;
         let new_version = manifest.latest_version + 1;
