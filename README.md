@@ -37,6 +37,10 @@ opendotsync pull
 opendotsync sync
 ```
 
+`init` refuses to overwrite existing configuration or sync state and reports the
+current profile and version. To intentionally replace the config, paths list, and
+sync metadata, run `opendotsync init --reinit` with your desired backend options.
+
 ## Commands
 
 | Command | Description |
@@ -46,6 +50,7 @@ opendotsync sync
 | `pull` | Download latest snapshot and merge |
 | `sync` | Pull → merge → push in one step (with retry) |
 | `status` | Show local version, remote version, and changed files |
+| `doctor` | Diagnose configuration, prerequisites, backend access, tracked paths, and encryption |
 | `diff` | Show files changed since last snapshot (`--remote` to diff vs remote) |
 | `log` | Show snapshot history |
 | `restore <version>` | Restore files from a specific snapshot |
@@ -64,6 +69,46 @@ absolute paths (`"$HOME/.bashrc"`), and home-relative paths (`~/.bashrc`). Use
 `opendotsync conflicts list` to see active conflicts, then `conflicts show <path>`
 to inspect one and `conflicts accept-local <path>` or `conflicts accept-remote <path>`
 to resolve it.
+
+Run `opendotsync doctor` when setup or sync fails. It reports all independent
+checks, including missing files or binaries, unreadable metadata, backend access,
+encryption key validity, and local/remote versions. `--config` selects a different
+config file and `--home` selects the directory containing tracked files; paths
+and state use the same platform directories as other commands.
+
+Doctor exits with status 1 if any check fails; warnings (such as a missing tracked
+file) alone do not fail the command. It does not sync files, create snapshots, or
+update the persistent GitHub cache. Local storage write access uses an automatically
+removed temporary file. GitHub uses a temporary checkout and dry-run push; server
+hooks and branch protection are not verified. Rclone checks read access only.
+
+## Shell completions
+
+Generate completions directly from the CLI for your shell:
+
+```bash
+# bash: append to ~/.bashrc, then start a new shell
+opendotsync completions bash >> ~/.bashrc
+
+# zsh: save to a directory on your fpath
+mkdir -p ~/.zfunc
+opendotsync completions zsh > ~/.zfunc/_opendotsync
+
+# fish: loaded automatically in new shells
+mkdir -p ~/.config/fish/completions
+opendotsync completions fish > ~/.config/fish/completions/opendotsync.fish
+```
+
+For zsh, add these lines to `~/.zshrc` (put the `fpath` line before any
+existing `compinit` call), then start a new shell:
+
+```zsh
+fpath=(~/.zfunc $fpath)
+autoload -Uz compinit
+compinit
+```
+
+Regenerate completions after upgrading opendotsync to pick up CLI changes.
 
 ## Configuration
 

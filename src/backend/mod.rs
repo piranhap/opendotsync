@@ -119,6 +119,16 @@ mod tests {
 }
 
 pub trait StorageBackend {
+    /// Check access without creating snapshots or changing remote data.
+    fn check_connectivity(&self) -> Result<(), BackendError> {
+        Err(BackendError::NotImplemented("connectivity check".into()))
+    }
+
+    /// Read remote version for diagnostics without updating a persistent cache.
+    fn diagnostic_version(&self, profile: &str) -> Result<Option<u64>, BackendError> {
+        self.latest_version(profile)
+    }
+
     fn push(&self, profile: &str, data: &[u8], message: Option<&str>) -> Result<u64, BackendError>;
 
     fn pull(&self, profile: &str, version: Option<u64>) -> Result<(u64, Vec<u8>), BackendError>;

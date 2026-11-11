@@ -33,13 +33,13 @@ fn push_auto_pull_behaviour() {
         std::fs::write(home_a.join(".bashrc"), "bash-base\n").unwrap();
         std::fs::write(home_a.join(".vimrc"), "vim-base\n").unwrap();
         use_machine(&base.join("machine_a"));
-        sync::cmd_init(&home_a, "local", Some(&store), "default").unwrap();
+        sync::cmd_init(&home_a, "local", Some(&store), "default", false).unwrap();
 
         // Machine B: same content, init pushes v2 so the store advances past A.
         std::fs::write(home_b.join(".bashrc"), "bash-base\n").unwrap();
         std::fs::write(home_b.join(".vimrc"), "vim-base\n").unwrap();
         use_machine(&base.join("machine_b"));
-        sync::cmd_init(&home_b, "local", Some(&store), "default").unwrap();
+        sync::cmd_init(&home_b, "local", Some(&store), "default", false).unwrap();
 
         // Machine A behind (local v1, remote v2). It edits .vimrc — a file the
         // remote did NOT change — and pushes WITHOUT pulling first.
@@ -75,11 +75,11 @@ fn push_auto_pull_behaviour() {
 
         std::fs::write(home_a.join(".bashrc"), "base\n").unwrap();
         use_machine(&base.join("machine_a"));
-        sync::cmd_init(&home_a, "local", Some(&store), "default").unwrap();
+        sync::cmd_init(&home_a, "local", Some(&store), "default", false).unwrap();
 
         std::fs::write(home_b.join(".bashrc"), "base\n").unwrap();
         use_machine(&base.join("machine_b"));
-        sync::cmd_init(&home_b, "local", Some(&store), "default").unwrap();
+        sync::cmd_init(&home_b, "local", Some(&store), "default", false).unwrap();
 
         use_machine(&base.join("machine_a"));
         std::fs::write(home_a.join(".bashrc"), "base\nlocal-edit\n").unwrap();
