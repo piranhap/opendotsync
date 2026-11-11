@@ -64,6 +64,12 @@ sync metadata, run `opendotsync init --reinit` with your desired backend options
 | `encrypt-key generate\|export` | Manage age encryption keys |
 | `install-timer` | Install systemd/launchd timer for automatic sync |
 
+Conflict commands accept paths relative to your home directory (`.bashrc`),
+absolute paths (`"$HOME/.bashrc"`), and home-relative paths (`~/.bashrc`). Use
+`opendotsync conflicts list` to see active conflicts, then `conflicts show <path>`
+to inspect one and `conflicts accept-local <path>` or `conflicts accept-remote <path>`
+to resolve it.
+
 Run `opendotsync doctor` when setup or sync fails. It reports all independent
 checks, including missing files or binaries, unreadable metadata, backend access,
 encryption key validity, and local/remote versions. `--config` selects a different
