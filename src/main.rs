@@ -243,7 +243,7 @@ fn run(
             cli::ConflictsAction::List => {
                 let entries = sync::cmd_conflicts_list()?;
                 if entries.is_empty() {
-                    println!("No conflicts.");
+                    println!("No conflicts. Run 'opendotsync pull' to check for remote changes.");
                 }
                 for (v, files) in &entries {
                     println!("v{v}:");
@@ -262,7 +262,7 @@ fn run(
                 Ok(())
             }
             cli::ConflictsAction::AcceptLocal { path } => {
-                sync::cmd_conflicts_accept_local(&path)?;
+                sync::cmd_conflicts_accept_local(home_dir, &path)?;
                 println!("Kept local version of '{path}', removed conflict stash.");
                 Ok(())
             }

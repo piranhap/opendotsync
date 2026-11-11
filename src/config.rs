@@ -18,10 +18,16 @@ pub struct AppConfig {
     pub backend: BackendConfig,
     #[serde(default = "default_profile")]
     pub profile: String,
+    #[serde(default = "default_full_snapshot_interval")]
+    pub full_snapshot_interval: std::num::NonZeroU64,
     #[serde(default)]
     pub encryption: EncryptionConfig,
     #[serde(default)]
     pub environments: Vec<EnvironmentRule>,
+}
+
+pub fn default_full_snapshot_interval() -> std::num::NonZeroU64 {
+    std::num::NonZeroU64::new(10).unwrap()
 }
 
 fn default_profile() -> String {
@@ -121,6 +127,7 @@ pub fn write_default_config(
     let config = AppConfig {
         backend: backend.clone(),
         profile: profile.to_string(),
+        full_snapshot_interval: default_full_snapshot_interval(),
         encryption: EncryptionConfig::default(),
         environments: Vec::new(),
     };
@@ -139,12 +146,24 @@ mod tests {
     use super::*;
 
     #[test]
+    fn snapshot_interval_defaults_and_rejects_zero() {
+        let legacy = "backend:\n  type: local\n  path: /tmp/store\n";
+        let config: AppConfig = serde_yml::from_str(legacy).unwrap();
+        assert_eq!(config.full_snapshot_interval.get(), 10);
+        assert!(
+            serde_yml::from_str::<AppConfig>(&format!("{legacy}full_snapshot_interval: 0\n"))
+                .is_err()
+        );
+    }
+
+    #[test]
     fn config_round_trip() {
         let config = AppConfig {
             backend: BackendConfig::Local {
                 path: PathBuf::from("/tmp/test-store"),
             },
             profile: "personal".to_string(),
+            full_snapshot_interval: default_full_snapshot_interval(),
             encryption: EncryptionConfig::default(),
             environments: vec![EnvironmentRule {
                 name: "laptop".to_string(),

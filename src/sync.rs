@@ -7,7 +7,7 @@ use thiserror::Error;
 use crate::backend::github::GitHubBackend;
 use crate::backend::local::LocalBackend;
 use crate::backend::rclone::RcloneBackend;
-use crate::backend::{BackendError, StorageBackend};
+use crate::backend::{BackendError, SnapshotOptions, SnapshotType, StorageBackend};
 use crate::collector;
 use crate::config::{AppConfig, BackendConfig, ConfigError};
 use crate::conflicts;
@@ -62,6 +62,8 @@ pub enum SyncError {
         "pull introduced {0} conflict(s) — resolve with `opendotsync conflicts` then push again"
     )]
     PullConflicts(usize),
+    #[error("No conflict stashed for '{0}'. Run 'conflicts list' to see active conflicts.")]
+    NoConflict(String),
 }
 
 pub struct PullResult {
@@ -203,6 +205,60 @@ fn create_backend(config: &AppConfig) -> Result<Box<dyn StorageBackend>, SyncErr
         BackendConfig::Sftp { .. } => Err(SyncError::UnsupportedBackend("sftp".to_string())),
         BackendConfig::Git { .. } => Err(SyncError::UnsupportedBackend("git".to_string())),
     }
+}
+
+/// Fetch and decrypt a full snapshot, or reconstruct a validated delta chain.
+fn load_snapshot(
+    backend: &dyn StorageBackend,
+    config: &AppConfig,
+    profile: &str,
+    version: Option<u64>,
+) -> Result<(u64, Vec<u8>), SyncError> {
+    let (target, data) = backend.pull(profile, version)?;
+    let mut versions = backend.list_versions(profile)?;
+    let snapshot = versions
+        .iter()
+        .find(|s| s.version == target)
+        .ok_or(BackendError::VersionNotFound(target))?;
+    let data = encryption::decrypt(&data, &config.encryption)?;
+    if snapshot.snapshot_type == SnapshotType::Full {
+        return Ok((target, data));
+    }
+    let invalid = || BackendError::Manifest(format!("invalid delta chain for version {target}"));
+    let base = snapshot.base_version.ok_or_else(invalid)?;
+    if base >= target {
+        return Err(invalid().into());
+    }
+    versions.sort_by_key(|s| s.version);
+    let chain: Vec<_> = versions
+        .iter()
+        .filter(|s| s.version >= base && s.version <= target)
+        .collect();
+    if chain.len() as u64 != target - base + 1
+        || chain
+            .first()
+            .is_none_or(|s| s.version != base || s.snapshot_type != SnapshotType::Full)
+        || chain.iter().skip(1).enumerate().any(|(i, s)| {
+            s.version != base + i as u64 + 1
+                || s.snapshot_type != SnapshotType::Delta
+                || s.base_version != Some(base)
+        })
+    {
+        return Err(invalid().into());
+    }
+    let (_, base_data) = backend.pull(profile, Some(base))?;
+    let base_data = encryption::decrypt(&base_data, &config.encryption)?;
+    let mut deltas = Vec::new();
+    for snapshot in chain.iter().skip(1) {
+        let decoded = if snapshot.version == target {
+            data.clone()
+        } else {
+            let (_, bytes) = backend.pull(profile, Some(snapshot.version))?;
+            encryption::decrypt(&bytes, &config.encryption)?
+        };
+        deltas.push((decoded, snapshot.deleted_files.clone()));
+    }
+    Ok((target, snapshot::apply_deltas(&base_data, &deltas)?))
 }
 
 pub fn cmd_init(
@@ -415,30 +471,67 @@ pub fn cmd_push(
         return Err(SyncError::SizeLimit(total));
     }
 
-    let snapshot_data = snapshot::create_snapshot(home_dir, &files)?;
-    let snapshot_data = encryption::encrypt(&snapshot_data, &config.encryption)?;
-
     let backend = create_backend(config)?;
-
-    // Check for version conflicts
-    if !force {
-        if let Some(remote_version) = backend.latest_version(&meta.profile)? {
-            if remote_version > meta.version {
-                return Err(SyncError::Backend(BackendError::VersionConflict {
-                    local: meta.version,
-                    remote: remote_version,
-                }));
-            }
+    let remote_version = backend.latest_version(&meta.profile)?.unwrap_or(0);
+    if !force && remote_version > meta.version {
+        return Err(BackendError::VersionConflict {
+            local: meta.version,
+            remote: remote_version,
         }
+        .into());
     }
-
-    let new_version = backend.push(&meta.profile, &snapshot_data, message)?;
+    let versions = backend.list_versions(&meta.profile)?;
+    let base_version = versions
+        .iter()
+        .find(|s| s.version == meta.version)
+        .map(|s| s.base_version.unwrap_or(s.version));
+    let parent_path = metadata::parent_snapshot_path();
+    let use_delta = !force
+        && remote_version == meta.version
+        && parent_path.exists()
+        && base_version.is_some_and(|base| {
+            base <= meta.version && meta.version - base < config.full_snapshot_interval.get() - 1
+        });
+    let (snapshot_data, parent_data, options) = if use_delta {
+        let changed: Vec<_> = files
+            .iter()
+            .filter(|f| meta.checksums.get(&f.relative_path) != Some(&f.checksum))
+            .cloned()
+            .collect();
+        let deleted_files: Vec<_> = meta
+            .checksums
+            .keys()
+            .filter(|p| !current_checksums.contains_key(*p))
+            .cloned()
+            .collect();
+        let delta = snapshot::create_delta_snapshot(home_dir, &changed)?;
+        let parent = encryption::decrypt(&std::fs::read(&parent_path)?, &config.encryption)?;
+        let full = snapshot::apply_deltas(&parent, &[(delta.clone(), deleted_files.clone())])?;
+        (
+            delta,
+            full,
+            SnapshotOptions {
+                snapshot_type: SnapshotType::Delta,
+                base_version,
+                deleted_files,
+            },
+        )
+    } else {
+        let full = snapshot::create_snapshot(home_dir, &files)?;
+        (full.clone(), full, SnapshotOptions::default())
+    };
+    let snapshot_data = encryption::encrypt(&snapshot_data, &config.encryption)?;
+    let parent_data = encryption::encrypt(&parent_data, &config.encryption)?;
+    let new_version = backend.push_snapshot(
+        &meta.profile,
+        &snapshot_data,
+        message,
+        options,
+        if force { None } else { Some(remote_version) },
+    )?;
 
     let _ = retention::prune(backend.as_ref(), &meta.profile, retention::DEFAULT_KEEP);
-
-    // Save as parent snapshot
-    let parent_path = metadata::parent_snapshot_path();
-    std::fs::write(&parent_path, &snapshot_data)?;
+    std::fs::write(&parent_path, &parent_data)?;
 
     // Update metadata
     let updated_meta = Metadata {
@@ -462,9 +555,17 @@ pub fn cmd_pull(
     let meta = metadata::load_metadata()?.ok_or(SyncError::NotInitialized)?;
 
     let backend = create_backend(config)?;
-    let (remote_version, remote_data) = backend.pull(&meta.profile, version)?;
-
+    let remote_version = match version {
+        Some(v) => v,
+        None => backend
+            .latest_version(&meta.profile)?
+            .ok_or_else(|| BackendError::NoSnapshots(meta.profile.clone()))?,
+    };
     if remote_version <= meta.version && !overwrite {
+        // Explicit historical requests still report missing versions.
+        if version.is_some() {
+            backend.pull(&meta.profile, version)?;
+        }
         return Ok(PullResult {
             version: meta.version,
             updated: vec![],
@@ -474,8 +575,12 @@ pub fn cmd_pull(
         });
     }
 
-    let remote_data = encryption::decrypt(&remote_data, &config.encryption)?;
-
+    let (remote_version, remote_data) = load_snapshot(
+        backend.as_ref(),
+        config,
+        &meta.profile,
+        Some(remote_version),
+    )?;
     let remote_snapshot = snapshot::extract_snapshot(&remote_data)?;
 
     // Load parent snapshot for ancestor comparison
@@ -506,6 +611,21 @@ pub fn cmd_pull(
     // silently strand the local edit. (Issue #1 and its non-conflict siblings.)
     let mut remote_checksums: std::collections::HashMap<String, String> =
         std::collections::HashMap::new();
+
+    // A remote deletion removes an unchanged local file. Preserve local edits so
+    // the next push can publish them, just as a merge that keeps local content does.
+    let remote_set: std::collections::HashSet<_> = remote_files.iter().collect();
+    for path in meta.checksums.keys().filter(|p| !remote_set.contains(p)) {
+        let local_path = home_dir.join(path);
+        if local_path.is_file()
+            && (overwrite
+                || collector::compute_checksum(&local_path).ok().as_ref()
+                    == meta.checksums.get(path))
+        {
+            std::fs::remove_file(&local_path)?;
+            updated.push(path.clone());
+        }
+    }
 
     for remote_file_path in &remote_files {
         let local_path = home_dir.join(remote_file_path);
@@ -551,7 +671,10 @@ pub fn cmd_pull(
     }
 
     // Save remote snapshot as new parent
-    std::fs::write(&parent_path, &remote_data)?;
+    std::fs::write(
+        &parent_path,
+        encryption::encrypt(&remote_data, &config.encryption)?,
+    )?;
 
     // metadata.checksums mirrors the new parent (remote snapshot). Any local file
     // that diverges from it will be detected and pushed on the next `push`. (Issue #1)
@@ -700,7 +823,8 @@ pub fn cmd_profiles_merge(
     to_profile: &str,
 ) -> Result<(), SyncError> {
     let backend = create_backend(config)?;
-    let (_version, data) = backend.pull(from_profile, None)?;
+    let (_version, data) = load_snapshot(backend.as_ref(), config, from_profile, None)?;
+    let data = encryption::encrypt(&data, &config.encryption)?;
     backend.push(
         to_profile,
         &data,
@@ -731,8 +855,8 @@ pub fn cmd_diff(
 
     let snapshot_data = if remote {
         let backend = create_backend(config)?;
-        let (_v, data) = backend.pull(&meta.profile, None)?;
-        encryption::decrypt(&data, &config.encryption)?
+        let (_v, data) = load_snapshot(backend.as_ref(), config, &meta.profile, None)?;
+        data
     } else {
         let parent_path = metadata::parent_snapshot_path();
         if !parent_path.exists() {
@@ -781,8 +905,7 @@ pub fn cmd_restore(
 ) -> Result<Vec<String>, SyncError> {
     let meta = metadata::load_metadata()?.ok_or(SyncError::NotInitialized)?;
     let backend = create_backend(config)?;
-    let (_v, data) = backend.pull(&meta.profile, Some(version))?;
-    let data = encryption::decrypt(&data, &config.encryption)?;
+    let (_v, data) = load_snapshot(backend.as_ref(), config, &meta.profile, Some(version))?;
     let snap_files = snapshot::list_snapshot_contents(&data)?;
     let extracted = snapshot::extract_snapshot(&data)?;
 
@@ -814,89 +937,95 @@ pub fn cmd_conflicts_list() -> Result<Vec<(u64, Vec<String>)>, SyncError> {
     for v in versions {
         let files = conflicts::list_conflicts_for_version(&state_dir, v)
             .map_err(|e| SyncError::Io(std::io::Error::other(e.to_string())))?;
-        result.push((v, files));
+        if !files.is_empty() {
+            result.push((v, files));
+        }
     }
     Ok(result)
 }
 
-pub fn cmd_conflicts_show(home_dir: &Path, path: &str) -> Result<(Vec<u8>, Vec<u8>), SyncError> {
-    let state_dir = metadata::state_dir();
-    let versions = conflicts::list_conflict_versions(&state_dir)
-        .map_err(|e| SyncError::Io(std::io::Error::other(e.to_string())))?;
-
-    let latest_version = versions.last().copied().ok_or_else(|| {
-        SyncError::Io(std::io::Error::new(
-            std::io::ErrorKind::NotFound,
-            "no conflicts found",
-        ))
-    })?;
-
-    let stash_path = state_dir
-        .join("conflicts")
-        .join(format!("v{latest_version}"))
-        .join(path);
-    if !stash_path.exists() {
-        return Err(SyncError::Io(std::io::Error::new(
-            std::io::ErrorKind::NotFound,
-            format!("no conflict stash for '{path}' in version {latest_version}"),
-        )));
+/// Convert shell-style paths to the home-relative keys used by conflict stashes.
+fn conflict_relative_path(home_dir: &Path, path: &str) -> Result<PathBuf, SyncError> {
+    let input = Path::new(path);
+    let relative = if let Some(relative) = path.strip_prefix("~/") {
+        Path::new(relative)
+    } else if input.is_absolute() {
+        input
+            .strip_prefix(home_dir)
+            .map_err(|_| SyncError::NoConflict(path.to_string()))?
+    } else {
+        input
+    };
+    // Never allow an argument to escape either the stash directory or the home.
+    let mut normalized = PathBuf::new();
+    for component in relative.components() {
+        match component {
+            std::path::Component::Normal(part) => normalized.push(part),
+            std::path::Component::CurDir => {}
+            _ => return Err(SyncError::NoConflict(path.to_string())),
+        }
     }
-    let local_path = home_dir.join(path);
+    if normalized.as_os_str().is_empty() {
+        return Err(SyncError::NoConflict(path.to_string()));
+    }
+    Ok(normalized)
+}
+
+/// Return stashes for this file in ascending version order.
+fn conflict_stashes(state_dir: &Path, path: &Path) -> Result<Vec<PathBuf>, SyncError> {
+    let versions = conflicts::list_conflict_versions(state_dir)
+        .map_err(|e| SyncError::Io(std::io::Error::other(e.to_string())))?;
+    let mut stashes = Vec::new();
+    for version in versions {
+        let stash = state_dir
+            .join("conflicts")
+            .join(format!("v{version}"))
+            .join(path);
+        match std::fs::metadata(&stash) {
+            Ok(meta) if meta.is_file() => stashes.push(stash),
+            Ok(_) => {}
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => return Err(e.into()),
+        }
+    }
+    if stashes.is_empty() {
+        return Err(SyncError::NoConflict(path.to_string_lossy().into_owned()));
+    }
+    Ok(stashes)
+}
+
+pub fn cmd_conflicts_show(home_dir: &Path, path: &str) -> Result<(Vec<u8>, Vec<u8>), SyncError> {
+    let path = conflict_relative_path(home_dir, path)?;
+    let stashes = conflict_stashes(&metadata::state_dir(), &path)?;
+    let local_path = home_dir.join(&path);
     let local = if local_path.exists() {
         std::fs::read(&local_path)?
     } else {
         vec![]
     };
-    let remote = std::fs::read(&stash_path)?;
+    let remote = std::fs::read(stashes.last().expect("nonempty stashes"))?;
     Ok((local, remote))
 }
 
-pub fn cmd_conflicts_accept_local(path: &str) -> Result<(), SyncError> {
-    let state_dir = metadata::state_dir();
-    let versions = conflicts::list_conflict_versions(&state_dir)
-        .map_err(|e| SyncError::Io(std::io::Error::other(e.to_string())))?;
-    for v in versions {
-        let stash = state_dir.join("conflicts").join(format!("v{v}")).join(path);
-        if stash.exists() {
-            std::fs::remove_file(&stash)?;
-        }
+pub fn cmd_conflicts_accept_local(home_dir: &Path, path: &str) -> Result<(), SyncError> {
+    let path = conflict_relative_path(home_dir, path)?;
+    for stash in conflict_stashes(&metadata::state_dir(), &path)? {
+        std::fs::remove_file(stash)?;
     }
     Ok(())
 }
 
 pub fn cmd_conflicts_accept_remote(home_dir: &Path, path: &str) -> Result<(), SyncError> {
-    let state_dir = metadata::state_dir();
-    let versions = conflicts::list_conflict_versions(&state_dir)
-        .map_err(|e| SyncError::Io(std::io::Error::other(e.to_string())))?;
-
-    let latest = versions.last().copied().ok_or_else(|| {
-        SyncError::Io(std::io::Error::new(
-            std::io::ErrorKind::NotFound,
-            "no conflicts found",
-        ))
-    })?;
-
-    let stash = state_dir
-        .join("conflicts")
-        .join(format!("v{latest}"))
-        .join(path);
-    if !stash.exists() {
-        return Err(SyncError::Io(std::io::Error::new(
-            std::io::ErrorKind::NotFound,
-            format!("no conflict stash for '{path}'"),
-        )));
-    }
-    let dst = home_dir.join(path);
+    let path = conflict_relative_path(home_dir, path)?;
+    let stashes = conflict_stashes(&metadata::state_dir(), &path)?;
+    let dst = home_dir.join(&path);
     if let Some(parent) = dst.parent() {
         std::fs::create_dir_all(parent)?;
     }
-    std::fs::copy(&stash, &dst)?;
-    // Remove all stashes for this path
-    for v in &versions {
-        let s = state_dir.join("conflicts").join(format!("v{v}")).join(path);
-        if s.exists() {
-            let _ = std::fs::remove_file(&s);
-        }
+    std::fs::copy(stashes.last().expect("nonempty stashes"), &dst)?;
+    // Remove all stashes for this path.
+    for stash in stashes {
+        std::fs::remove_file(stash)?;
     }
     Ok(())
 }

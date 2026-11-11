@@ -2,7 +2,7 @@ use aws_sdk_s3::{config::Region, primitives::ByteStream, Client};
 use chrono::Utc;
 use tokio::runtime::Runtime;
 
-use super::{BackendError, BackendManifest, SnapshotMeta, StorageBackend};
+use super::{BackendError, BackendManifest, SnapshotMeta, SnapshotOptions, StorageBackend};
 
 /// Synchronous adapter around the AWS SDK. The owned runtime also keeps the
 /// SDK's HTTP connection pool alive between operations.
@@ -125,8 +125,20 @@ impl StorageBackend for S3Backend {
     }
 
     fn push(&self, profile: &str, data: &[u8], message: Option<&str>) -> Result<u64, BackendError> {
+        self.push_snapshot(profile, data, message, SnapshotOptions::default(), None)
+    }
+
+    fn push_snapshot(
+        &self,
+        profile: &str,
+        data: &[u8],
+        message: Option<&str>,
+        options: SnapshotOptions,
+        expected_version: Option<u64>,
+    ) -> Result<u64, BackendError> {
         self.runtime.block_on(async {
             let mut manifest = self.load_manifest(profile).await?;
+            manifest.validate_push(expected_version)?;
             let version = manifest.latest_version + 1;
             self.put_object(
                 &self.key(profile, &format!("v{version:03}.tar.zst")),
@@ -139,6 +151,9 @@ impl StorageBackend for S3Backend {
                 timestamp: Utc::now(),
                 size_bytes: data.len() as u64,
                 message: message.map(str::to_owned),
+                snapshot_type: options.snapshot_type,
+                base_version: options.base_version,
+                deleted_files: options.deleted_files,
             });
             self.save_manifest(profile, &manifest).await?;
             Ok(version)
@@ -174,8 +189,10 @@ impl StorageBackend for S3Backend {
             if manifest.snapshots.len() <= keep {
                 return Ok(());
             }
-            manifest.snapshots.sort_by_key(|s| s.version);
-            let remove = manifest.snapshots.len() - keep;
+            let remove = manifest.prune_boundary(keep);
+            if remove == 0 {
+                return Ok(());
+            }
             for snapshot in &manifest.snapshots[..remove] {
                 let key = self.key(profile, &format!("v{:03}.tar.zst", snapshot.version));
                 self.client
@@ -406,5 +423,52 @@ mod tests {
             store.objects.lock().unwrap()["/dots/test/manifest.json"],
             manifest
         );
+    }
+    #[test]
+    fn delta_metadata_retention_and_stale_pushes() {
+        use super::super::SnapshotType;
+        let (store, backend) = Store::start(None);
+        backend.push("test", b"base", None).unwrap();
+        let options = SnapshotOptions {
+            snapshot_type: SnapshotType::Delta,
+            base_version: Some(1),
+            deleted_files: vec![".oldrc".into()],
+        };
+        assert_eq!(
+            backend
+                .push_snapshot("test", b"delta", None, options.clone(), Some(1))
+                .unwrap(),
+            2
+        );
+        let versions = backend.list_versions("test").unwrap();
+        assert_eq!(versions[0].snapshot_type, SnapshotType::Full);
+        assert_eq!(versions[1].snapshot_type, SnapshotType::Delta);
+        assert_eq!(versions[1].base_version, Some(1));
+        assert_eq!(versions[1].deleted_files, vec![".oldrc"]);
+        let objects = store.objects.lock().unwrap().clone();
+        assert!(matches!(
+            backend.push_snapshot("test", b"stale", None, options, Some(1)),
+            Err(BackendError::VersionConflict {
+                local: 1,
+                remote: 2
+            })
+        ));
+        assert_eq!(*store.objects.lock().unwrap(), objects);
+        backend.prune("test", 1).unwrap();
+        assert_eq!(backend.list_versions("test").unwrap().len(), 2);
+        assert_eq!(backend.pull("test", Some(1)).unwrap().1, b"base");
+        backend.push("test", b"checkpoint", None).unwrap();
+        backend.prune("test", 1).unwrap();
+        assert_eq!(backend.list_versions("test").unwrap().len(), 1);
+        assert!(!store
+            .objects
+            .lock()
+            .unwrap()
+            .contains_key("/dots/test/v001.tar.zst"));
+        assert!(!store
+            .objects
+            .lock()
+            .unwrap()
+            .contains_key("/dots/test/v002.tar.zst"));
     }
 }

@@ -13,9 +13,8 @@ pub fn prune(
     if versions.len() <= keep {
         return Ok(0);
     }
-    let to_delete = versions.len() - keep;
     backend.prune(profile, keep)?;
-    Ok(to_delete)
+    Ok(versions.len() - backend.list_versions(profile)?.len())
 }
 
 #[cfg(test)]

@@ -3,7 +3,8 @@ use std::process::Command;
 use tempfile::NamedTempFile;
 
 use super::{
-    run_captured, run_checked, BackendError, BackendManifest, SnapshotMeta, StorageBackend,
+    run_captured, run_checked, BackendError, BackendManifest, SnapshotMeta, SnapshotOptions,
+    StorageBackend,
 };
 
 pub struct RcloneBackend {
@@ -94,7 +95,19 @@ impl StorageBackend for RcloneBackend {
     }
 
     fn push(&self, profile: &str, data: &[u8], message: Option<&str>) -> Result<u64, BackendError> {
+        self.push_snapshot(profile, data, message, SnapshotOptions::default(), None)
+    }
+
+    fn push_snapshot(
+        &self,
+        profile: &str,
+        data: &[u8],
+        message: Option<&str>,
+        options: SnapshotOptions,
+        expected_version: Option<u64>,
+    ) -> Result<u64, BackendError> {
         let mut manifest = self.load_manifest(profile)?;
+        manifest.validate_push(expected_version)?;
         let new_version = manifest.latest_version + 1;
 
         let tmp = NamedTempFile::new()?;
@@ -111,6 +124,9 @@ impl StorageBackend for RcloneBackend {
             timestamp: Utc::now(),
             size_bytes: data.len() as u64,
             message: message.map(String::from),
+            snapshot_type: options.snapshot_type,
+            base_version: options.base_version,
+            deleted_files: options.deleted_files,
         });
         self.save_manifest(profile, &manifest)?;
         Ok(new_version)
@@ -144,8 +160,10 @@ impl StorageBackend for RcloneBackend {
         if manifest.snapshots.len() <= keep {
             return Ok(());
         }
-        manifest.snapshots.sort_by_key(|s| s.version);
-        let to_remove = manifest.snapshots.len() - keep;
+        let to_remove = manifest.prune_boundary(keep);
+        if to_remove == 0 {
+            return Ok(());
+        }
         for snap in &manifest.snapshots[..to_remove] {
             let remote = self.remote_path(profile, &Self::version_filename(snap.version));
             let _ = run_captured(Command::new("rclone").args(["deletefile", &remote]));

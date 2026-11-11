@@ -201,11 +201,20 @@ pub enum ConflictsAction {
     /// Show unresolved conflicts
     List,
     /// Show diff between local and conflicted version
-    Show { path: String },
+    Show {
+        /// Dotfile path relative to home (e.g. .bashrc), absolute, or ~/...
+        path: String,
+    },
     /// Keep local, discard conflict
-    AcceptLocal { path: String },
+    AcceptLocal {
+        /// Dotfile path relative to home (e.g. .bashrc), absolute, or ~/...
+        path: String,
+    },
     /// Replace local with conflicted version
-    AcceptRemote { path: String },
+    AcceptRemote {
+        /// Dotfile path relative to home (e.g. .bashrc), absolute, or ~/...
+        path: String,
+    },
     /// Open merge tool for all conflicts
     Resolve,
 }
