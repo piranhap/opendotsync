@@ -68,10 +68,22 @@ backend:
   type: local
   path: /home/user/.opendotsync-store
 profile: default
+full_snapshot_interval: 10
 encryption:
   enabled: false
   # identity: /home/user/.config/opendotsync/identity.age
 ```
+
+Pushes store changed and added files as deltas, with deleted paths recorded in the
+manifest. A full snapshot starts each group of `full_snapshot_interval` versions
+(default 10; use 1 for full snapshots only). Pull, restore, remote diff, and profile
+merge reconstruct the full snapshot from its base and intervening deltas. Existing
+manifests without a `type` field are treated as full snapshots. Forced pushes
+always create a full snapshot.
+
+Retention keeps the latest 10 versions plus any older base and deltas they need,
+so the store may temporarily contain more than 10 archives. Local edits to files
+deleted remotely are preserved and can be published by the next push.
 
 ## Paths list
 

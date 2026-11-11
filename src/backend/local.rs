@@ -2,7 +2,7 @@ use std::path::PathBuf;
 
 use chrono::Utc;
 
-use super::{BackendError, BackendManifest, SnapshotMeta, StorageBackend};
+use super::{BackendError, BackendManifest, SnapshotMeta, SnapshotOptions, StorageBackend};
 
 pub struct LocalBackend {
     base_path: PathBuf,
@@ -60,10 +60,22 @@ impl LocalBackend {
 
 impl StorageBackend for LocalBackend {
     fn push(&self, profile: &str, data: &[u8], message: Option<&str>) -> Result<u64, BackendError> {
+        self.push_snapshot(profile, data, message, SnapshotOptions::default(), None)
+    }
+
+    fn push_snapshot(
+        &self,
+        profile: &str,
+        data: &[u8],
+        message: Option<&str>,
+        options: SnapshotOptions,
+        expected_version: Option<u64>,
+    ) -> Result<u64, BackendError> {
         let dir = self.profile_dir(profile);
         std::fs::create_dir_all(&dir)?;
 
         let mut manifest = self.load_manifest(profile)?;
+        manifest.validate_push(expected_version)?;
         let new_version = manifest.latest_version + 1;
 
         // Atomic write: temp file then rename
@@ -79,6 +91,9 @@ impl StorageBackend for LocalBackend {
             timestamp: Utc::now(),
             size_bytes: data.len() as u64,
             message: message.map(String::from),
+            snapshot_type: options.snapshot_type,
+            base_version: options.base_version,
+            deleted_files: options.deleted_files,
         });
 
         self.save_manifest(profile, &manifest)?;
@@ -118,8 +133,10 @@ impl StorageBackend for LocalBackend {
         if manifest.snapshots.len() <= keep {
             return Ok(());
         }
-        manifest.snapshots.sort_by_key(|s| s.version);
-        let to_remove = manifest.snapshots.len() - keep;
+        let to_remove = manifest.prune_boundary(keep);
+        if to_remove == 0 {
+            return Ok(());
+        }
         for snap in &manifest.snapshots[..to_remove] {
             let path = self.snapshot_path(profile, snap.version);
             if path.exists() {
@@ -149,6 +166,35 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let backend = LocalBackend::new(dir.path().to_path_buf());
         (dir, backend)
+    }
+
+    #[test]
+    fn stale_delta_is_rejected_before_writing() {
+        let (_dir, backend) = test_backend();
+        backend.push("test", b"base", None).unwrap();
+        backend.push("test", b"another writer", None).unwrap();
+        let error = backend
+            .push_snapshot(
+                "test",
+                b"delta",
+                None,
+                SnapshotOptions {
+                    snapshot_type: super::super::SnapshotType::Delta,
+                    base_version: Some(1),
+                    deleted_files: Vec::new(),
+                },
+                Some(1),
+            )
+            .unwrap_err();
+        assert!(matches!(
+            error,
+            BackendError::VersionConflict {
+                local: 1,
+                remote: 2
+            }
+        ));
+        assert!(!backend.snapshot_path("test", 3).exists());
+        assert_eq!(backend.latest_version("test").unwrap(), Some(2));
     }
 
     #[test]

@@ -73,12 +73,34 @@ pub enum BackendError {
     Persist(String),
 }
 
+/// Deltas contain changes since the preceding version, rooted at `base_version`.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum SnapshotType {
+    #[default]
+    Full,
+    Delta,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct SnapshotOptions {
+    pub snapshot_type: SnapshotType,
+    pub base_version: Option<u64>,
+    pub deleted_files: Vec<String>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SnapshotMeta {
     pub version: u64,
     pub timestamp: DateTime<Utc>,
     pub size_bytes: u64,
     pub message: Option<String>,
+    #[serde(default, rename = "type", alias = "snapshot_type")]
+    pub snapshot_type: SnapshotType,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub base_version: Option<u64>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub deleted_files: Vec<String>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -121,6 +143,22 @@ mod tests {
 pub trait StorageBackend {
     fn push(&self, profile: &str, data: &[u8], message: Option<&str>) -> Result<u64, BackendError>;
 
+    /// Store a delta only if its predecessor is still the latest version.
+    fn push_snapshot(
+        &self,
+        profile: &str,
+        data: &[u8],
+        message: Option<&str>,
+        options: SnapshotOptions,
+        expected_version: Option<u64>,
+    ) -> Result<u64, BackendError> {
+        let _ = expected_version;
+        if options.snapshot_type != SnapshotType::Full {
+            return Err(BackendError::NotImplemented("delta snapshots".into()));
+        }
+        self.push(profile, data, message)
+    }
+
     fn pull(&self, profile: &str, version: Option<u64>) -> Result<(u64, Vec<u8>), BackendError>;
 
     fn list_versions(&self, profile: &str) -> Result<Vec<SnapshotMeta>, BackendError>;
@@ -128,4 +166,34 @@ pub trait StorageBackend {
     fn prune(&self, profile: &str, keep: usize) -> Result<(), BackendError>;
 
     fn latest_version(&self, profile: &str) -> Result<Option<u64>, BackendError>;
+}
+
+impl BackendManifest {
+    pub(crate) fn validate_push(&self, expected: Option<u64>) -> Result<(), BackendError> {
+        if let Some(local) = expected {
+            if local != self.latest_version {
+                return Err(BackendError::VersionConflict {
+                    local,
+                    remote: self.latest_version,
+                });
+            }
+        }
+        Ok(())
+    }
+
+    /// Keep the newest versions plus the entire chain needed by the oldest retained delta.
+    pub(crate) fn prune_boundary(&mut self, keep: usize) -> usize {
+        self.snapshots.sort_by_key(|s| s.version);
+        let mut boundary = self.snapshots.len().saturating_sub(keep);
+        if let Some(first) = self.snapshots.get(boundary) {
+            if let Some(base) = first.base_version {
+                boundary = self
+                    .snapshots
+                    .iter()
+                    .position(|s| s.version == base)
+                    .unwrap_or(0);
+            }
+        }
+        boundary
+    }
 }

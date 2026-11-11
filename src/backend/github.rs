@@ -3,7 +3,8 @@ use std::path::PathBuf;
 use std::process::Command;
 
 use super::{
-    run_captured, run_checked, BackendError, BackendManifest, SnapshotMeta, StorageBackend,
+    run_captured, run_checked, BackendError, BackendManifest, SnapshotMeta, SnapshotOptions,
+    StorageBackend,
 };
 
 pub struct GitHubBackend {
@@ -265,11 +266,23 @@ impl GitHubBackend {
 
 impl StorageBackend for GitHubBackend {
     fn push(&self, profile: &str, data: &[u8], message: Option<&str>) -> Result<u64, BackendError> {
+        self.push_snapshot(profile, data, message, SnapshotOptions::default(), None)
+    }
+
+    fn push_snapshot(
+        &self,
+        profile: &str,
+        data: &[u8],
+        message: Option<&str>,
+        options: SnapshotOptions,
+        expected_version: Option<u64>,
+    ) -> Result<u64, BackendError> {
         if self.ensure_clone().is_err() {
             self.init_repo_if_needed()?;
         }
 
         let mut manifest = self.load_manifest(profile)?;
+        manifest.validate_push(expected_version)?;
         let new_version = manifest.latest_version + 1;
 
         let profile_dir = self.profile_dir(profile);
@@ -282,6 +295,9 @@ impl StorageBackend for GitHubBackend {
             timestamp: Utc::now(),
             size_bytes: data.len() as u64,
             message: message.map(String::from),
+            snapshot_type: options.snapshot_type,
+            base_version: options.base_version,
+            deleted_files: options.deleted_files,
         });
         self.save_manifest(profile, &manifest)?;
 
@@ -326,8 +342,10 @@ impl StorageBackend for GitHubBackend {
         if manifest.snapshots.len() <= keep {
             return Ok(());
         }
-        manifest.snapshots.sort_by_key(|s| s.version);
-        let to_remove = manifest.snapshots.len() - keep;
+        let to_remove = manifest.prune_boundary(keep);
+        if to_remove == 0 {
+            return Ok(());
+        }
         for snap in &manifest.snapshots[..to_remove] {
             let path = self
                 .profile_dir(profile)

@@ -102,6 +102,7 @@ mod tests {
                 path: path.to_path_buf(),
             },
             profile: "default".to_string(),
+            full_snapshot_interval: crate::config::default_full_snapshot_interval(),
             encryption: EncryptionConfig::default(),
             environments: vec![],
         }
@@ -152,6 +153,7 @@ mod tests {
                 path: "/tmp".into(),
             },
             profile: "default".to_string(),
+            full_snapshot_interval: crate::config::default_full_snapshot_interval(),
             encryption: EncryptionConfig::default(),
             environments: vec![EnvironmentRule {
                 name: "work".to_string(),

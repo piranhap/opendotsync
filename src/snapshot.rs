@@ -49,6 +49,75 @@ pub fn create_snapshot(
     Ok(compressed)
 }
 
+/// A delta uses the same archive format as a full snapshot, but only includes changes.
+pub fn create_delta_snapshot(
+    home_dir: &Path,
+    changed_files: &[CollectedFile],
+) -> Result<Vec<u8>, SnapshotError> {
+    create_snapshot(home_dir, changed_files)
+}
+
+pub fn apply_delta(base_data: &[u8], delta_data: &[u8]) -> Result<Vec<u8>, SnapshotError> {
+    apply_deltas(base_data, &[(delta_data.to_vec(), Vec::new())])
+}
+
+/// Reconstruct in one temporary directory, compressing only once after all overlays.
+pub fn apply_deltas(
+    base_data: &[u8],
+    deltas: &[(Vec<u8>, Vec<String>)],
+) -> Result<Vec<u8>, SnapshotError> {
+    let base = extract_snapshot(base_data)?;
+    for (data, deleted) in deltas {
+        for path in deleted {
+            if path.is_empty()
+                || !Path::new(path)
+                    .components()
+                    .all(|c| matches!(c, std::path::Component::Normal(_)))
+            {
+                return Err(SnapshotError::Tar(format!("invalid deleted path: {path}")));
+            }
+            let target = base.path().join(path);
+            match std::fs::remove_file(&target) {
+                Ok(()) => {}
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+                Err(e) => return Err(e.into()),
+            }
+        }
+        let overlay = extract_snapshot(data)?;
+        for path in list_snapshot_contents(data)? {
+            let src = overlay.path().join(&path);
+            let dst = base.path().join(&path);
+            if dst.is_dir() {
+                std::fs::remove_dir_all(&dst)?;
+            }
+            if let Some(parent) = dst.parent() {
+                std::fs::create_dir_all(parent)?;
+            }
+            std::fs::copy(src, dst)?;
+        }
+    }
+    let mut files = Vec::new();
+    for entry in walkdir::WalkDir::new(base.path()).min_depth(1) {
+        let entry = entry.map_err(|e| SnapshotError::Io(e.into()))?;
+        if entry.file_type().is_file() {
+            files.push(CollectedFile {
+                relative_path: entry
+                    .path()
+                    .strip_prefix(base.path())
+                    .unwrap()
+                    .to_string_lossy()
+                    .into_owned(),
+                absolute_path: entry.path().to_path_buf(),
+                checksum: String::new(),
+                size: 0,
+                is_symlink: false,
+            });
+        }
+    }
+    files.sort_by(|a, b| a.relative_path.cmp(&b.relative_path));
+    create_snapshot(base.path(), &files)
+}
+
 fn read_with_retry(path: &Path, relative: &str) -> Result<Vec<u8>, SnapshotError> {
     let pre_hash = crate::collector::compute_checksum(path).map_err(|_| {
         SnapshotError::Io(std::io::Error::other(format!("failed to hash {relative}")))
