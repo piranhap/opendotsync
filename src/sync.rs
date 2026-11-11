@@ -43,6 +43,10 @@ pub enum SyncError {
     UnsupportedBackend(String),
     #[error("not initialized — run `opendotsync init` first")]
     NotInitialized,
+    #[error(
+        "Already initialised (profile: {profile}, version: {version}). Use --reinit to overwrite."
+    )]
+    AlreadyInitialized { profile: String, version: String },
     #[error("snapshot exceeds size limit: {0} bytes")]
     SizeLimit(u64),
     #[error("encryption error: {0}")]
@@ -186,7 +190,28 @@ pub fn cmd_init(
     backend_type: &str,
     backend_path: Option<&Path>,
     profile: &str,
+    reinit: bool,
 ) -> Result<(), SyncError> {
+    let config_path = crate::config::default_config_path();
+    let paths_path = paths::default_paths_path();
+    let metadata_path = metadata::metadata_path();
+    if !reinit && (config_path.exists() || paths_path.exists() || metadata_path.exists()) {
+        // Reading the old state is best-effort: incomplete or corrupt files
+        // still need explicit permission to be overwritten.
+        let meta = metadata::load_metadata_from(&metadata_path).ok().flatten();
+        let existing_profile = meta.as_ref().map(|m| m.profile.clone()).or_else(|| {
+            crate::config::load_config(Some(&config_path))
+                .ok()
+                .map(|c| c.profile)
+        });
+        return Err(SyncError::AlreadyInitialized {
+            profile: existing_profile.unwrap_or_else(|| "unknown".to_string()),
+            version: meta
+                .map(|m| m.version.to_string())
+                .unwrap_or_else(|| "unknown".to_string()),
+        });
+    }
+
     let backend_config = match backend_type {
         "local" => {
             let path = backend_path
@@ -230,12 +255,10 @@ pub fn cmd_init(
     };
 
     // Write config
-    let config_path = crate::config::default_config_path();
     crate::config::write_default_config(&config_path, &backend_config, profile)?;
     println!("Created config: {}", config_path.display());
 
     // Write paths list
-    let paths_path = paths::default_paths_path();
     paths::write_default_paths(&paths_path)?;
     println!("Created paths list: {}", paths_path.display());
 

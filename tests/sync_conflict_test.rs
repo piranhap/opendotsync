@@ -32,12 +32,12 @@ fn push_after_conflict_keeps_local_change() {
     // Machine A: .bashrc = "line1", init pushes v1.
     std::fs::write(home_a.join(".bashrc"), "line1\n").unwrap();
     use_machine(&base.join("machine_a"));
-    sync::cmd_init(&home_a, "local", Some(&store), "default").unwrap();
+    sync::cmd_init(&home_a, "local", Some(&store), "default", false).unwrap();
 
     // Machine B: a different .bashrc, init pushes v2 to the same store.
     std::fs::write(home_b.join(".bashrc"), "from_b\n").unwrap();
     use_machine(&base.join("machine_b"));
-    sync::cmd_init(&home_b, "local", Some(&store), "default").unwrap();
+    sync::cmd_init(&home_b, "local", Some(&store), "default", false).unwrap();
 
     // Machine A makes a LOCAL, unpushed edit, then pulls v2 → conflict (keep local).
     use_machine(&base.join("machine_a"));

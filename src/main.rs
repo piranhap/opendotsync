@@ -43,7 +43,8 @@ fn run(
             backend,
             profile,
             path,
-        } => sync::cmd_init(home_dir, &backend, path.as_deref(), &profile),
+            reinit,
+        } => sync::cmd_init(home_dir, &backend, path.as_deref(), &profile, reinit),
 
         cli::Command::Push {
             force,

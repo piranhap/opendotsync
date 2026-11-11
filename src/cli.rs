@@ -44,6 +44,10 @@ pub enum Command {
         /// Storage path: local dir, rclone remote path, or GitHub repo URL
         #[arg(long)]
         path: Option<PathBuf>,
+
+        /// Overwrite existing config, paths list, and sync metadata
+        #[arg(long)]
+        reinit: bool,
     },
 
     /// Create snapshot and upload
