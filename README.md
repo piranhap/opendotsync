@@ -73,6 +73,41 @@ encryption:
   # identity: /home/user/.config/opendotsync/identity.age
 ```
 
+## S3-compatible storage
+
+Build with the optional S3 backend:
+
+```bash
+cargo install --path . --features backend-s3
+opendotsync init --backend s3 --path my-dotsync-bucket
+```
+
+Create the bucket first. Credentials are resolved by the AWS SDK's standard
+provider chain, including `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY`
+(`AWS_SESSION_TOKEN` for temporary credentials) and `~/.aws/credentials`.
+Credentials are never stored in opendotsync's config.
+
+For custom endpoints, configure `~/.config/opendotsync/config.yaml` before the
+first push (you can run `init --backend local` to generate the other state files):
+
+```yaml
+backend:
+  type: s3
+  bucket: my-dotsync-bucket
+  region: us-east-1  # optional; defaults to us-east-1; use your provider's region
+  prefix: opendotsync/  # optional
+  endpoint: https://s3.example.com  # optional; omit for AWS S3
+profile: default
+```
+
+Set `endpoint` to your B2, R2, or MinIO S3 API endpoint; for R2, use `region: auto`.
+Custom endpoints use path-style bucket addressing. Objects are stored as
+`opendotsync/default/manifest.json` and `opendotsync/default/v001.tar.zst`
+(without `opendotsync/` when the prefix is omitted). The credentials need object
+read, write, and delete access within this prefix. Bucket creation is external.
+As with the local backend, coordinate pushes so only one machine writes a
+profile at a time.
+
 ## Paths list
 
 `~/.config/opendotsync/paths.yaml`:

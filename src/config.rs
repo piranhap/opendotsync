@@ -37,6 +37,8 @@ pub enum BackendConfig {
     S3 {
         bucket: String,
         region: Option<String>,
+        prefix: Option<String>,
+        endpoint: Option<String>,
     },
     #[serde(rename = "sftp")]
     Sftp {
@@ -179,5 +181,38 @@ mod tests {
 
         let loaded = load_config(Some(&config_path)).unwrap();
         assert_eq!(loaded.profile, "test");
+    }
+    #[test]
+    fn s3_config_supports_optional_fields_and_round_trips() {
+        let minimal: AppConfig =
+            serde_yml::from_str("backend:\n  type: s3\n  bucket: dots\n").unwrap();
+        assert!(matches!(
+            minimal.backend,
+            BackendConfig::S3 {
+                region: None,
+                prefix: None,
+                endpoint: None,
+                ..
+            }
+        ));
+        let config: AppConfig = serde_yml::from_str(
+            "backend:\n  type: s3\n  bucket: dots\n  region: auto\n  prefix: nested/dots/\n  endpoint: https://example.com\n"
+        ).unwrap();
+        let yaml = serde_yml::to_string(&config).unwrap();
+        let parsed: AppConfig = serde_yml::from_str(&yaml).unwrap();
+        match parsed.backend {
+            BackendConfig::S3 {
+                bucket,
+                region,
+                prefix,
+                endpoint,
+            } => {
+                assert_eq!(bucket, "dots");
+                assert_eq!(region.as_deref(), Some("auto"));
+                assert_eq!(prefix.as_deref(), Some("nested/dots/"));
+                assert_eq!(endpoint.as_deref(), Some("https://example.com"));
+            }
+            _ => panic!("expected S3 backend"),
+        }
     }
 }
