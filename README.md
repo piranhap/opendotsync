@@ -63,6 +63,34 @@ sync metadata, run `opendotsync init --reinit` with your desired backend options
 | `encrypt-key generate\|export` | Manage age encryption keys |
 | `install-timer` | Install systemd/launchd timer for automatic sync |
 
+## Shell completions
+
+Generate completions directly from the CLI for your shell:
+
+```bash
+# bash: append to ~/.bashrc, then start a new shell
+opendotsync completions bash >> ~/.bashrc
+
+# zsh: save to a directory on your fpath
+mkdir -p ~/.zfunc
+opendotsync completions zsh > ~/.zfunc/_opendotsync
+
+# fish: loaded automatically in new shells
+mkdir -p ~/.config/fish/completions
+opendotsync completions fish > ~/.config/fish/completions/opendotsync.fish
+```
+
+For zsh, add these lines to `~/.zshrc` (put the `fpath` line before any
+existing `compinit` call), then start a new shell:
+
+```zsh
+fpath=(~/.zfunc $fpath)
+autoload -Uz compinit
+compinit
+```
+
+Regenerate completions after upgrading opendotsync to pick up CLI changes.
+
 ## Configuration
 
 `~/.config/opendotsync/config.yaml`:
