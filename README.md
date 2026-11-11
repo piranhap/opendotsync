@@ -50,6 +50,7 @@ sync metadata, run `opendotsync init --reinit` with your desired backend options
 | `pull` | Download latest snapshot and merge |
 | `sync` | Pull → merge → push in one step (with retry) |
 | `status` | Show local version, remote version, and changed files |
+| `doctor` | Diagnose configuration, prerequisites, backend access, tracked paths, and encryption |
 | `diff` | Show files changed since last snapshot (`--remote` to diff vs remote) |
 | `log` | Show snapshot history |
 | `restore <version>` | Restore files from a specific snapshot |
@@ -62,6 +63,18 @@ sync metadata, run `opendotsync init --reinit` with your desired backend options
 | `config show\|edit` | View or edit configuration |
 | `encrypt-key generate\|export` | Manage age encryption keys |
 | `install-timer` | Install systemd/launchd timer for automatic sync |
+
+Run `opendotsync doctor` when setup or sync fails. It reports all independent
+checks, including missing files or binaries, unreadable metadata, backend access,
+encryption key validity, and local/remote versions. `--config` selects a different
+config file and `--home` selects the directory containing tracked files; paths
+and state use the same platform directories as other commands.
+
+Doctor exits with status 1 if any check fails; warnings (such as a missing tracked
+file) alone do not fail the command. It does not sync files, create snapshots, or
+update the persistent GitHub cache. Local storage write access uses an automatically
+removed temporary file. GitHub uses a temporary checkout and dry-run push; server
+hooks and branch protection are not verified. Rclone checks read access only.
 
 ## Shell completions
 

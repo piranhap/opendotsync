@@ -59,6 +59,13 @@ impl LocalBackend {
 }
 
 impl StorageBackend for LocalBackend {
+    fn check_connectivity(&self) -> Result<(), BackendError> {
+        std::fs::read_dir(&self.base_path)?;
+        // A temporary file verifies write access and is removed on drop.
+        let _probe = tempfile::NamedTempFile::new_in(&self.base_path)?;
+        Ok(())
+    }
+
     fn push(&self, profile: &str, data: &[u8], message: Option<&str>) -> Result<u64, BackendError> {
         let dir = self.profile_dir(profile);
         std::fs::create_dir_all(&dir)?;

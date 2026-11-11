@@ -18,11 +18,16 @@ use crate::paths::{self, PathsError, PathsList};
 use crate::retention;
 use crate::snapshot::{self, SnapshotError};
 
+mod doctor;
+pub use doctor::cmd_doctor;
+
 /// The `(modified, added, deleted)` path lists returned by [`cmd_diff`].
 pub type DiffResult = (Vec<String>, Vec<String>, Vec<String>);
 
 #[derive(Debug, Error)]
 pub enum SyncError {
+    #[error("doctor found setup problems — see the report above")]
+    DoctorFailed,
     #[error("config error: {0}")]
     Config(#[from] ConfigError),
     #[error("paths error: {0}")]

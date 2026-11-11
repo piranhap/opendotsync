@@ -95,6 +95,16 @@ fn run(
             Ok(())
         }
 
+        cli::Command::Doctor => {
+            let report = sync::cmd_doctor(config_path, home_dir);
+            print!("{report}");
+            if report.has_errors {
+                Err(sync::SyncError::DoctorFailed)
+            } else {
+                Ok(())
+            }
+        }
+
         cli::Command::Du => {
             let paths_list = paths::load_paths(None)?;
             let report = sync::cmd_du(&paths_list, home_dir)?;

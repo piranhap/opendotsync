@@ -83,6 +83,9 @@ pub enum Command {
     /// Show sync status
     Status,
 
+    /// Diagnose configuration, prerequisites, and backend access
+    Doctor,
+
     /// Show projected snapshot size with breakdown by file
     Du,
 
