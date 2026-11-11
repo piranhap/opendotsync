@@ -186,7 +186,22 @@ fn create_backend(config: &AppConfig) -> Result<Box<dyn StorageBackend>, SyncErr
         BackendConfig::GitHub { repo, branch } => {
             Ok(Box::new(GitHubBackend::new(repo.clone(), branch.clone())))
         }
-        BackendConfig::S3 { .. } => Err(SyncError::UnsupportedBackend("s3".to_string())),
+        #[cfg(feature = "backend-s3")]
+        BackendConfig::S3 {
+            bucket,
+            region,
+            prefix,
+            endpoint,
+        } => Ok(Box::new(crate::backend::s3::S3Backend::new(
+            bucket.clone(),
+            region.as_deref(),
+            prefix.as_deref(),
+            endpoint.as_deref(),
+        )?)),
+        #[cfg(not(feature = "backend-s3"))]
+        BackendConfig::S3 { .. } => Err(SyncError::UnsupportedBackend(
+            "s3 (rebuild with --features backend-s3)".to_string(),
+        )),
         BackendConfig::Sftp { .. } => Err(SyncError::UnsupportedBackend("sftp".to_string())),
         BackendConfig::Git { .. } => Err(SyncError::UnsupportedBackend("git".to_string())),
     }
@@ -279,6 +294,26 @@ pub fn cmd_init(
                 .map(PathBuf::from)
                 .unwrap_or_else(|| home_dir.join(".opendotsync-store"));
             BackendConfig::Local { path }
+        }
+        #[cfg(feature = "backend-s3")]
+        "s3" => BackendConfig::S3 {
+            bucket: backend_path
+                .filter(|p| !p.as_os_str().is_empty())
+                .map(|p| p.to_string_lossy().into_owned())
+                .ok_or_else(|| {
+                    SyncError::UnsupportedBackend(
+                        "s3 backend requires --path <bucket-name>".to_string(),
+                    )
+                })?,
+            region: None,
+            prefix: None,
+            endpoint: None,
+        },
+        #[cfg(not(feature = "backend-s3"))]
+        "s3" => {
+            return Err(SyncError::UnsupportedBackend(
+                "s3 (rebuild with --features backend-s3)".to_string(),
+            ))
         }
         "rclone" => {
             let remote = std::env::var("OPENDOTSYNC_RCLONE_REMOTE")

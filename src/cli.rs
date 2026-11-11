@@ -37,7 +37,7 @@ pub enum Command {
 
     /// Initialize opendotsync in the current home directory
     Init {
-        /// Backend type: local, rclone, github
+        /// Backend type: local, rclone, github, s3 (requires backend-s3 feature)
         #[arg(long, default_value = "local")]
         backend: String,
 
@@ -45,7 +45,7 @@ pub enum Command {
         #[arg(long, default_value = "default")]
         profile: String,
 
-        /// Storage path: local dir, rclone remote path, or GitHub repo URL
+        /// Storage path: local dir, rclone remote path, GitHub repo URL, or S3 bucket name
         #[arg(long)]
         path: Option<PathBuf>,
 

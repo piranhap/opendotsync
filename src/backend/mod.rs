@@ -2,7 +2,8 @@ mod git;
 pub mod github;
 pub mod local;
 pub mod rclone;
-mod s3;
+#[cfg(feature = "backend-s3")]
+pub mod s3;
 mod sftp;
 
 use std::io::Write;
@@ -71,6 +72,8 @@ pub enum BackendError {
     NotImplemented(String),
     #[error("failed to persist file: {0}")]
     Persist(String),
+    #[error("S3 error: {0}")]
+    S3(String),
 }
 
 /// Deltas contain changes since the preceding version, rooted at `base_version`.
