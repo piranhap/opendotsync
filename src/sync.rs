@@ -53,6 +53,8 @@ pub enum SyncError {
         "pull introduced {0} conflict(s) — resolve with `opendotsync conflicts` then push again"
     )]
     PullConflicts(usize),
+    #[error("No conflict stashed for '{0}'. Run 'conflicts list' to see active conflicts.")]
+    NoConflict(String),
 }
 
 pub struct PullResult {
@@ -751,89 +753,95 @@ pub fn cmd_conflicts_list() -> Result<Vec<(u64, Vec<String>)>, SyncError> {
     for v in versions {
         let files = conflicts::list_conflicts_for_version(&state_dir, v)
             .map_err(|e| SyncError::Io(std::io::Error::other(e.to_string())))?;
-        result.push((v, files));
+        if !files.is_empty() {
+            result.push((v, files));
+        }
     }
     Ok(result)
 }
 
-pub fn cmd_conflicts_show(home_dir: &Path, path: &str) -> Result<(Vec<u8>, Vec<u8>), SyncError> {
-    let state_dir = metadata::state_dir();
-    let versions = conflicts::list_conflict_versions(&state_dir)
-        .map_err(|e| SyncError::Io(std::io::Error::other(e.to_string())))?;
-
-    let latest_version = versions.last().copied().ok_or_else(|| {
-        SyncError::Io(std::io::Error::new(
-            std::io::ErrorKind::NotFound,
-            "no conflicts found",
-        ))
-    })?;
-
-    let stash_path = state_dir
-        .join("conflicts")
-        .join(format!("v{latest_version}"))
-        .join(path);
-    if !stash_path.exists() {
-        return Err(SyncError::Io(std::io::Error::new(
-            std::io::ErrorKind::NotFound,
-            format!("no conflict stash for '{path}' in version {latest_version}"),
-        )));
+/// Convert shell-style paths to the home-relative keys used by conflict stashes.
+fn conflict_relative_path(home_dir: &Path, path: &str) -> Result<PathBuf, SyncError> {
+    let input = Path::new(path);
+    let relative = if let Some(relative) = path.strip_prefix("~/") {
+        Path::new(relative)
+    } else if input.is_absolute() {
+        input
+            .strip_prefix(home_dir)
+            .map_err(|_| SyncError::NoConflict(path.to_string()))?
+    } else {
+        input
+    };
+    // Never allow an argument to escape either the stash directory or the home.
+    let mut normalized = PathBuf::new();
+    for component in relative.components() {
+        match component {
+            std::path::Component::Normal(part) => normalized.push(part),
+            std::path::Component::CurDir => {}
+            _ => return Err(SyncError::NoConflict(path.to_string())),
+        }
     }
-    let local_path = home_dir.join(path);
+    if normalized.as_os_str().is_empty() {
+        return Err(SyncError::NoConflict(path.to_string()));
+    }
+    Ok(normalized)
+}
+
+/// Return stashes for this file in ascending version order.
+fn conflict_stashes(state_dir: &Path, path: &Path) -> Result<Vec<PathBuf>, SyncError> {
+    let versions = conflicts::list_conflict_versions(state_dir)
+        .map_err(|e| SyncError::Io(std::io::Error::other(e.to_string())))?;
+    let mut stashes = Vec::new();
+    for version in versions {
+        let stash = state_dir
+            .join("conflicts")
+            .join(format!("v{version}"))
+            .join(path);
+        match std::fs::metadata(&stash) {
+            Ok(meta) if meta.is_file() => stashes.push(stash),
+            Ok(_) => {}
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => return Err(e.into()),
+        }
+    }
+    if stashes.is_empty() {
+        return Err(SyncError::NoConflict(path.to_string_lossy().into_owned()));
+    }
+    Ok(stashes)
+}
+
+pub fn cmd_conflicts_show(home_dir: &Path, path: &str) -> Result<(Vec<u8>, Vec<u8>), SyncError> {
+    let path = conflict_relative_path(home_dir, path)?;
+    let stashes = conflict_stashes(&metadata::state_dir(), &path)?;
+    let local_path = home_dir.join(&path);
     let local = if local_path.exists() {
         std::fs::read(&local_path)?
     } else {
         vec![]
     };
-    let remote = std::fs::read(&stash_path)?;
+    let remote = std::fs::read(stashes.last().expect("nonempty stashes"))?;
     Ok((local, remote))
 }
 
-pub fn cmd_conflicts_accept_local(path: &str) -> Result<(), SyncError> {
-    let state_dir = metadata::state_dir();
-    let versions = conflicts::list_conflict_versions(&state_dir)
-        .map_err(|e| SyncError::Io(std::io::Error::other(e.to_string())))?;
-    for v in versions {
-        let stash = state_dir.join("conflicts").join(format!("v{v}")).join(path);
-        if stash.exists() {
-            std::fs::remove_file(&stash)?;
-        }
+pub fn cmd_conflicts_accept_local(home_dir: &Path, path: &str) -> Result<(), SyncError> {
+    let path = conflict_relative_path(home_dir, path)?;
+    for stash in conflict_stashes(&metadata::state_dir(), &path)? {
+        std::fs::remove_file(stash)?;
     }
     Ok(())
 }
 
 pub fn cmd_conflicts_accept_remote(home_dir: &Path, path: &str) -> Result<(), SyncError> {
-    let state_dir = metadata::state_dir();
-    let versions = conflicts::list_conflict_versions(&state_dir)
-        .map_err(|e| SyncError::Io(std::io::Error::other(e.to_string())))?;
-
-    let latest = versions.last().copied().ok_or_else(|| {
-        SyncError::Io(std::io::Error::new(
-            std::io::ErrorKind::NotFound,
-            "no conflicts found",
-        ))
-    })?;
-
-    let stash = state_dir
-        .join("conflicts")
-        .join(format!("v{latest}"))
-        .join(path);
-    if !stash.exists() {
-        return Err(SyncError::Io(std::io::Error::new(
-            std::io::ErrorKind::NotFound,
-            format!("no conflict stash for '{path}'"),
-        )));
-    }
-    let dst = home_dir.join(path);
+    let path = conflict_relative_path(home_dir, path)?;
+    let stashes = conflict_stashes(&metadata::state_dir(), &path)?;
+    let dst = home_dir.join(&path);
     if let Some(parent) = dst.parent() {
         std::fs::create_dir_all(parent)?;
     }
-    std::fs::copy(&stash, &dst)?;
-    // Remove all stashes for this path
-    for v in &versions {
-        let s = state_dir.join("conflicts").join(format!("v{v}")).join(path);
-        if s.exists() {
-            let _ = std::fs::remove_file(&s);
-        }
+    std::fs::copy(stashes.last().expect("nonempty stashes"), &dst)?;
+    // Remove all stashes for this path.
+    for stash in stashes {
+        std::fs::remove_file(stash)?;
     }
     Ok(())
 }
