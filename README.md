@@ -37,6 +37,10 @@ opendotsync pull
 opendotsync sync
 ```
 
+`init` refuses to overwrite existing configuration or sync state and reports the
+current profile and version. To intentionally replace the config, paths list, and
+sync metadata, run `opendotsync init --reinit` with your desired backend options.
+
 ## Commands
 
 | Command | Description |
