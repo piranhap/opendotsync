@@ -31,6 +31,10 @@ pub struct Cli {
 
 #[derive(Subcommand)]
 pub enum Command {
+    /// Generate shell completions
+    #[command(hide = true)]
+    Completions { shell: clap_complete::Shell },
+
     /// Initialize opendotsync in the current home directory
     Init {
         /// Backend type: local, rclone, github, s3 (requires backend-s3 feature)
@@ -44,6 +48,10 @@ pub enum Command {
         /// Storage path: local dir, rclone remote path, GitHub repo URL, or S3 bucket name
         #[arg(long)]
         path: Option<PathBuf>,
+
+        /// Overwrite existing config, paths list, and sync metadata
+        #[arg(long)]
+        reinit: bool,
     },
 
     /// Create snapshot and upload
@@ -74,6 +82,9 @@ pub enum Command {
 
     /// Show sync status
     Status,
+
+    /// Diagnose configuration, prerequisites, and backend access
+    Doctor,
 
     /// Show projected snapshot size with breakdown by file
     Du,

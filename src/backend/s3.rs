@@ -112,6 +112,18 @@ impl S3Backend {
 }
 
 impl StorageBackend for S3Backend {
+    fn check_connectivity(&self) -> Result<(), BackendError> {
+        self.runtime.block_on(async {
+            self.client
+                .head_bucket()
+                .bucket(&self.bucket)
+                .send()
+                .await
+                .map_err(|e| BackendError::S3(format!("check bucket {}: {e:?}", self.bucket)))?;
+            Ok(())
+        })
+    }
+
     fn push(&self, profile: &str, data: &[u8], message: Option<&str>) -> Result<u64, BackendError> {
         self.runtime.block_on(async {
             let mut manifest = self.load_manifest(profile).await?;
@@ -235,6 +247,7 @@ mod tests {
                     let key = request.url().split('?').next().unwrap().to_owned();
                     let mut objects = data.lock().unwrap();
                     let response = match request.method() {
+                        Method::Head => Response::from_data(Vec::new()),
                         Method::Get => match objects.get(&key) {
                             Some(bytes) => Response::from_data(bytes.clone()),
                             None => Response::from_string(
@@ -301,6 +314,7 @@ mod tests {
     #[test]
     fn snapshot_lifecycle_and_profile_isolation() {
         let (store, backend) = Store::start(Some("/nested/dots/"));
+        backend.check_connectivity().unwrap();
         assert_eq!(backend.latest_version("personal").unwrap(), None);
         assert!(backend.list_versions("personal").unwrap().is_empty());
         assert!(matches!(
@@ -357,6 +371,10 @@ mod tests {
             Err(BackendError::Manifest(_))
         ));
         store.fail.store(1, Ordering::Relaxed);
+        assert!(matches!(
+            backend.check_connectivity(),
+            Err(BackendError::S3(_))
+        ));
         assert!(matches!(
             backend.latest_version("missing"),
             Err(BackendError::S3(_))
