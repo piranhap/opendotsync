@@ -31,6 +31,10 @@ pub struct Cli {
 
 #[derive(Subcommand)]
 pub enum Command {
+    /// Generate shell completions
+    #[command(hide = true)]
+    Completions { shell: clap_complete::Shell },
+
     /// Initialize opendotsync in the current home directory
     Init {
         /// Backend type: local, rclone, github
