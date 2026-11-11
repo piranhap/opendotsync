@@ -1,5 +1,5 @@
 #![allow(dead_code)]
-use clap::Parser;
+use clap::{CommandFactory, Parser};
 
 mod backend;
 mod cli;
@@ -39,11 +39,22 @@ fn run(
     quiet: bool,
 ) -> Result<(), sync::SyncError> {
     match command {
+        cli::Command::Completions { shell } => {
+            clap_complete::generate(
+                shell,
+                &mut cli::Cli::command(),
+                "opendotsync",
+                &mut std::io::stdout(),
+            );
+            Ok(())
+        }
+
         cli::Command::Init {
             backend,
             profile,
             path,
-        } => sync::cmd_init(home_dir, &backend, path.as_deref(), &profile),
+            reinit,
+        } => sync::cmd_init(home_dir, &backend, path.as_deref(), &profile, reinit),
 
         cli::Command::Push {
             force,

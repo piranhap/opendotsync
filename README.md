@@ -37,6 +37,10 @@ opendotsync pull
 opendotsync sync
 ```
 
+`init` refuses to overwrite existing configuration or sync state and reports the
+current profile and version. To intentionally replace the config, paths list, and
+sync metadata, run `opendotsync init --reinit` with your desired backend options.
+
 ## Commands
 
 | Command | Description |
@@ -71,6 +75,34 @@ file) alone do not fail the command. It does not sync files, create snapshots, o
 update the persistent GitHub cache. Local storage write access uses an automatically
 removed temporary file. GitHub uses a temporary checkout and dry-run push; server
 hooks and branch protection are not verified. Rclone checks read access only.
+
+## Shell completions
+
+Generate completions directly from the CLI for your shell:
+
+```bash
+# bash: append to ~/.bashrc, then start a new shell
+opendotsync completions bash >> ~/.bashrc
+
+# zsh: save to a directory on your fpath
+mkdir -p ~/.zfunc
+opendotsync completions zsh > ~/.zfunc/_opendotsync
+
+# fish: loaded automatically in new shells
+mkdir -p ~/.config/fish/completions
+opendotsync completions fish > ~/.config/fish/completions/opendotsync.fish
+```
+
+For zsh, add these lines to `~/.zshrc` (put the `fpath` line before any
+existing `compinit` call), then start a new shell:
+
+```zsh
+fpath=(~/.zfunc $fpath)
+autoload -Uz compinit
+compinit
+```
+
+Regenerate completions after upgrading opendotsync to pick up CLI changes.
 
 ## Configuration
 
